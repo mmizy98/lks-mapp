@@ -401,7 +401,7 @@ function renderVec(){
   var key=cur+'|'+tgt+'|'+src+'|'+(V?1:0); if(key===vecKey) return; vecKey=key;
   if(!V){vsvg.innerHTML=''; return}
   var O='#ff9a3d', T='#2bc4bd', h='';
-  h+='<path d="'+V.inside+'" fill="var(--bld)" fill-rule="evenodd"/>';
+  h+='<path d="'+V.inside+'" fill="var(--bld)" stroke="var(--wall)" stroke-width="5" stroke-linejoin="round" fill-rule="evenodd"/>';
   h+='<path d="'+V.hall+'" fill="var(--hall)" fill-rule="evenodd"/>';
   (V.paths||[]).forEach(function(p){
     var dx=p.b[0]-p.a[0],dy=p.b[1]-p.a[1],L=Math.hypot(dx,dy)||1,nx=-dy/L*p.w/2,ny=dx/L*p.w/2, ex=dx/L*12, ey=dy/L*12;
@@ -425,7 +425,8 @@ function renderVec(){
   V.rooms.forEach(function(r){
     var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), wc=r.k==='wc', grey=r.k==='area'||r.k==='place';
     var fill=isT?'var(--accent)':isS?'#14532f':wc?'#211a36':grey?'var(--svc)':'var(--room)';
-    h+='<path d="'+r.p+'" fill="'+fill+'" fill-rule="evenodd"/>';
+    var stc=isT?'var(--accent-hi)':isS?'var(--start)':wc?'#8b78ff':grey?'#2a3140':'var(--room-line)';
+    h+='<rect x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="5" fill="'+fill+'" stroke="'+stc+'" stroke-width="2"/>';
     if(!r.l) return;
     var named=grey, n=String(r.l).length, vert=r.bh>r.bw*1.6&&r.bw<70, len=(vert?r.bh:r.bw)*0.86;
     var fs=Math.min(named?16:20,len/(n*(named?0.62:0.68)),r.r*1.8);

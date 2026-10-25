@@ -238,14 +238,51 @@ for f in ORDER:
             hall[lab == i] = 0
 
     # ---- vector output ----
-    rooms_out = []
+    # schematic: every room is a clean rectangle at its real place, no walls
+    boxes = []
     for r, m in zip(labelled, room_masks):
         l, x0, x1, y0, y1, k, al = r
-        p = room_shape(cv2.dilate(m, np.ones((3, 3), np.uint8)) & (inside | walls))
-        lx, ly, rad = label_spot(m)
         ys, xs = np.nonzero(m)
-        bw, bh = (xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) if len(xs) else (x1 - x0, y1 - y0)
-        o = {'l': l, 'k': k, 'p': p, 'lx': lx, 'ly': ly, 'r': round(rad, 1), 'bw': int(bw), 'bh': int(bh)}
+        if len(xs) > 20:
+            bx0, bx1 = np.percentile(xs, [2, 98]); by0, by1 = np.percentile(ys, [2, 98])
+        else:
+            bx0, bx1, by0, by1 = x0, x1, y0, y1
+        boxes.append([float(bx0), float(by0), float(bx1) + 1, float(by1) + 1])
+    for _ in range(3):  # split overlaps between neighbours at the middle
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a_, b_ = boxes[i], boxes[j]
+                ox = min(a_[2], b_[2]) - max(a_[0], b_[0]); oy = min(a_[3], b_[3]) - max(a_[1], b_[1])
+                if ox <= 0 or oy <= 0:
+                    continue
+                if ox <= oy:
+                    if (a_[0] + a_[2]) < (b_[0] + b_[2]):
+                        m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; a_[2] = min(a_[2], m_); b_[0] = max(b_[0], m_)
+                    else:
+                        m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; b_[2] = min(b_[2], m_); a_[0] = max(a_[0], m_)
+                else:
+                    if (a_[1] + a_[3]) < (b_[1] + b_[3]):
+                        m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; a_[3] = min(a_[3], m_); b_[1] = max(b_[1], m_)
+                    else:
+                        m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; b_[3] = min(b_[3], m_); a_[1] = max(a_[1], m_)
+    # tidy rows/columns: box edges that are close get one shared coordinate
+    from wallvec import _cluster
+    for idxs in ((1, 3), (0, 2)):
+        vals = [(b[i], 1.0) for b in boxes for i in idxs]
+        if vals:
+            m_ = _cluster(vals, 12); k_ = 0
+            for b in boxes:
+                for i in idxs:
+                    b[i] = m_[k_]; k_ += 1
+    rooms_out = []
+    for r, b in zip(labelled, boxes):
+        l, x0, x1, y0, y1, k, al = r
+        g = 3  # gap between neighbouring boxes
+        X0, Y0, X1, Y1 = [int(round(v)) for v in (b[0] + g, b[1] + g, b[2] - g, b[3] - g)]
+        if X1 - X0 < 6 or Y1 - Y0 < 6:
+            X0, Y0, X1, Y1 = x0 + g, y0 + g, x1 - g, y1 - g
+        o = {'l': l, 'k': k, 'p': f'M{X0} {Y0}H{X1}V{Y1}H{X0}Z', 'x': X0, 'y': Y0, 'w': X1 - X0, 'h': Y1 - Y0,
+             'lx': (X0 + X1) // 2, 'ly': (Y0 + Y1) // 2, 'r': min(X1 - X0, Y1 - Y0) / 2, 'bw': X1 - X0, 'bh': Y1 - Y0}
         if al:
             o['al'] = list(al)
         rooms_out.append(o)
@@ -278,7 +315,8 @@ for f in ORDER:
                 if y + s > split:
                     break
                 boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
-        cores.append({'pts': snap_poly(hull.tolist()), 'split': split, 'main': bool(main), 'boxes': boxes,
+        hx0, hy0, hx1, hy1 = int(hull[:, 0].min()), int(hull[:, 1].min()), int(hull[:, 0].max()), int(hull[:, 1].max())
+        cores.append({'pts': [[hx0, hy0], [hx1, hy0], [hx1, hy1], [hx0, hy1]], 'split': split, 'main': bool(main), 'boxes': boxes,
                       'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
     # interiors whose inner lines (seating, furniture, scan junk) are dropped: rooms + their boxes
     clutter = cv2.erode(rooms_all, np.ones((11, 11), np.uint8))
@@ -293,10 +331,10 @@ for f in ORDER:
     wy, wx = np.nonzero(walls)
     vec[f] = {
         'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
-        'wl': clean_walls(vwalls, clutter),
+        'wl': [],
         'cores': cores,
-        'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=3.5, min_area=2000),
-        'hall': straight_poly_path(cv2.dilate(hall, np.ones((5, 5), np.uint8)), eps=6.0, min_area=300),
+        'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=10, min_area=4000),
+        'hall': straight_poly_path(cv2.morphologyEx(hall, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8)), eps=8, min_area=600),
         'rooms': rooms_out,
         'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
         'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],
