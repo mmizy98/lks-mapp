@@ -181,6 +181,85 @@ def rect_door(r, corr):
     return cx, cy
 
 
+
+def box_graph(f, corr, labelled, halls):
+    """Routing graph for schematic floors: straight runs along corridor centre lines,
+    a perpendicular stub from the corridor to each room's door on its edge."""
+    nodes, edges, pos = [], [], {}
+    def node(t, x, y, l=None):
+        x, y = int(round(x)), int(round(y))
+        if t == 'c' and (x, y) in pos:
+            return pos[(x, y)]
+        o = {'id': f'b{f}_{len(nodes)}', 't': t, 'x': x, 'y': y}
+        if l:
+            o['l'] = l
+        nodes.append(o)
+        if t == 'c':
+            pos[(x, y)] = o['id']
+        return o['id']
+    lines = []  # (rect, horizontal, centre, [ (along, id) ])
+    for (x0, y0, x1, y1) in corr:
+        hz = (x1 - x0) >= (y1 - y0)
+        lines.append([(x0, y0, x1, y1), hz, (y0 + y1) / 2 if hz else (x0 + x1) / 2, []])
+    def put(li, along):
+        (x0, y0, x1, y1), hz, c, pts = lines[li]
+        along = min(max(along, (x0 if hz else y0) + 4), (x1 if hz else y1) - 4)
+        i = node('c', along, c) if hz else node('c', c, along)
+        pts.append((along, i)); return i
+    # junctions between touching corridor pieces
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            A, B = lines[i], lines[j]; a, b = A[0], B[0]
+            if not (a[0] <= b[2] + 2 and b[0] <= a[2] + 2 and a[1] <= b[3] + 2 and b[1] <= a[3] + 2):
+                continue
+            if A[1] != B[1]:
+                H_, V_, hi, vi = (A, B, i, j) if A[1] else (B, A, j, i)
+                x, y = V_[2], H_[2]
+                n1 = put(hi, x); n2 = put(vi, y)
+                if n1 != n2:
+                    edges.append([n1, n2])
+            else:
+                hz = A[1]
+                m = (max(a[0], b[0]) + min(a[2], b[2])) / 2 if hz else (max(a[1], b[1]) + min(a[3], b[3])) / 2
+                n1 = put(i, m); n2 = put(j, m)
+                if n1 != n2:
+                    edges.append([n1, n2])
+    def nearest(x, y, X=None, Y=None):
+        X = x if X is None else X; Y = y if Y is None else Y
+        best = None
+        for li, ((x0, y0, x1, y1), hz, c, _) in enumerate(lines):
+            dx = max(x0 - X, 0, x - x1); dy = max(y0 - Y, 0, y - y1); d2 = dx * dx + dy * dy + (0 if hz else 50)  # prefer real corridors to connectors
+            if best is None or d2 < best[0]:
+                best = (d2, li)
+        return best[1]
+    for (l, x0, x1, y0, y1, k, al) in labelled:
+        if k not in ('room', 'place', 'wc'):
+            continue
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        li = nearest(x0, y0, x1, y1); (a0, b0, a1, b1), hz, c, _ = lines[li]
+        if b0 >= y1 - 3:      # corridor below the room
+            dx_, dy_ = min(max(cx, a0 + 8), a1 - 8), y1
+        elif b1 <= y0 + 3:    # above
+            dx_, dy_ = min(max(cx, a0 + 8), a1 - 8), y0
+        elif a0 >= x1 - 3:    # right
+            dx_, dy_ = x1, min(max(cy, b0 + 8), b1 - 8)
+        else:                 # left
+            dx_, dy_ = x0, min(max(cy, b0 + 8), b1 - 8)
+        dx_ = min(max(dx_, x0 + 6), x1 - 6); dy_ = min(max(dy_, y0 + 6), y1 - 6) if dx_ in (x0, x1) else dy_
+        foot = put(li, dx_ if hz else dy_)
+        for lab in ([l] + list(al) if k != 'place' else list(al) + [l]):
+            edges.append([node('r', dx_, dy_, lab), foot])
+    for (l, hx, hy) in halls:
+        li = nearest(hx, hy); hz = lines[li][1]
+        edges.append([node('s', hx, lines[li][2], l), put(li, hx if hz else hy)])
+    for (_, hz, c, pts) in lines:
+        pts.sort()
+        for (a, i), (b, j) in zip(pts, pts[1:]):
+            if i != j:
+                edges.append([i, j])
+    return {'nodes': nodes, 'edges': [list(e) for e in {tuple(sorted(e)) for e in edges}]}
+
+
 vec, seed = {}, {}
 for f in ORDER:
     d = F[f]
@@ -212,6 +291,9 @@ for f in ORDER:
                   'stubs': [[s['x'], sh(s['y']), s['w'], s['h']] for s in B['stubs']],
                   'cores': [dict(c, y=sh(c['y']), lifts=[[lx, sh(ly), lw] for lx, ly, lw in c.get('lifts', [])]) for c in B['cores']],
                   'rooms': rooms_out, 'labels': [], 'ent': [], 'paths': []}
+        seed[f] = box_graph(f, d['corr'], labelled, d['st'])
+        print(f, 'box rooms', len(rooms_out), 'nodes', len(seed[f]['nodes']))
+        continue
     else:
         im = cv2.imread(os.path.join(HERE, 'scans', f'f{f}.jpg'), 0)
         H, W = im.shape
