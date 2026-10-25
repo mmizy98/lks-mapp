@@ -164,7 +164,7 @@ var selNode=null, activeCorr=null, linkA=null;
 var dbRef=null, dirty={}, saveTimer=null;
 var LS='ulk-map-v3';
 var NOSCAN=!!window.ULK_NOSCAN, ready=false;
-var DIM={'1a':1533,'1':1144,'2':1145,'3':1140,'4':1046,'5':738,'6':703,'7':1048,'8':701,'9':1060,'10':708,'11':1054};
+var DIM={'1a':1533,'1':1144,'2':1145,'3':1140,'4':1046,'5':520,'6':520,'7':520,'8':520,'9':520,'10':520,'11':520};
 
 function clone(o){return JSON.parse(JSON.stringify(o))}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
@@ -396,10 +396,55 @@ var hitCtx=null;
 function inShape(r,ip){
   try{ if(!hitCtx) hitCtx=document.createElement('canvas').getContext('2d'); if(!r._p) r._p=new Path2D(r.p); return hitCtx.isPointInPath(r._p,ip.x,ip.y,'evenodd') }catch(e){ return false }
 }
+function lift(x,y,w,T){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+w+'" rx="3" fill="#0f2224" stroke="'+T+'" stroke-width="2"/><path d="M'+(x+5)+' '+(y+5)+'L'+(x+w-5)+' '+(y+w-5)+'M'+(x+w-5)+' '+(y+5)+'L'+(x+5)+' '+(y+w-5)+'" stroke="'+T+'" stroke-width="2"/>'}
+function renderBox(V,tgt,src){
+  var O='#ff9a3d', T='#2bc4bd', L='var(--wall)', B='var(--bld)', h='', b=V.band;
+  function R(x,y,w,hh,rx,fill,st,sw){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+hh+'" rx="'+rx+'" fill="'+fill+'"'+(st?' stroke="'+st+'" stroke-width="'+sw+'"':'')+'/>'}
+  h+=R(b[0],b[1],b[2]-b[0],b[3]-b[1],10,B,L,4);
+  V.cores.forEach(function(c){h+=R(c.x,c.y,c.w,c.h+8,8,B,L,4)});
+  h+=R(b[0]+2,b[1]+2,b[2]-b[0]-4,b[3]-b[1]-4,9,B);
+  V.cores.forEach(function(c){h+=R(c.x+3,c.y+3,c.w-6,c.h-3,6,B)});
+  V.corr.forEach(function(c){h+=R(c[0],c[1],c[2],c[3],0,'var(--hall)')});
+  V.cores.forEach(function(c){
+    var x=c.x,y=c.y,w=c.w,hh=c.h,s='';
+    if(c.main){
+      var st=110,ly=y+10,bx=30;
+      while(ly+bx<=y+hh-st-6){s+=lift(x+w/2-bx/2,ly,bx,T); ly+=bx+6}
+      var sy=y+hh-st; s+=R(x+8,sy,w-16,y+hh-sy-8,4,'#1f1812',O,2);
+      for(var yy=sy+8;yy<y+hh-12;yy+=9) s+='<line x1="'+(x+12)+'" x2="'+(x+w-12)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+O+'" stroke-width="2"/>';
+    } else {
+      s+=R(x+8,y+8,w-16,hh-14,4,'#1f1812',O,2);
+      for(var xx=x+15;xx<x+w-12;xx+=9) s+='<line x1="'+xx+'" x2="'+xx+'" y1="'+(y+12)+'" y2="'+(y+hh-10)+'" stroke="'+O+'" stroke-width="2"/>';
+      (c.lifts||[]).forEach(function(q){s+=lift(q[0],q[1],q[2],T)});
+    }
+    h+=s;
+  });
+  V.stubs.forEach(function(s){h+=R(s[0],s[1],s[2],s[3],6,'#141a26','#252d3d',2)});
+  var lab='';
+  V.rooms.forEach(function(r){
+    var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), k=r.k;
+    var c={room:['#13284a','#2f6fe0'],wc:['#211a36','#8b78ff'],place:['#151a24','#3a4252'],area:['#151a24','#2a3140']}[k]||['#13284a','#2f6fe0'];
+    if(isT) c=['var(--accent)','var(--accent-hi)']; else if(isS) c=['#14532f','var(--start)'];
+    h+=R(r.x,r.y,r.w,r.h,6,c[0],c[1],2);
+    var n=String(r.l).length, w=r.w, hh=r.h, vert=w<0.55*hh&&w<48, Ln=(vert?hh:w)-10;
+    var fs=Math.min(26,Ln/(n*0.62),(vert?w:hh)*0.55); if(fs<7) return;
+    var cx=r.x+w/2, cy=r.y+hh/2, col=isT||isS?'#fff':k==='wc'?'#d6ccff':k==='room'?'#fff':'#aab4c6';
+    lab+='<text x="'+cx+'" y="'+cy+'" font-size="'+fs.toFixed(1)+'" fill="'+col+'"'+(vert?' transform="rotate(-90 '+cx+' '+cy+')"':'')+'>'+esc(r.l)+'</text>';
+  });
+  h+='<g class="rm">'+lab+'</g>';
+  G[cur].nodes.forEach(function(n){ if(n.t!=='s'&&n.t!=='l') return;
+    var gs=18,g=3,x=n.x-gs*1.5-g,y=n.y-gs/2;
+    h+='<rect x="'+(x-5)+'" y="'+(y-5)+'" width="'+(gs*3+g*2+10)+'" height="'+(gs+10)+'" rx="8" fill="#0b0d12" stroke="#2a3140" stroke-width="1.5"/>';
+    [0,2].forEach(function(i){var xx=x+i*(gs+g); h+=R(xx,y,gs,gs,4,'#1f1812',O,2); for(var k=1;k<4;k++) h+='<line x1="'+(xx+4)+'" x2="'+(xx+gs-4)+'" y1="'+(y+k*gs/4)+'" y2="'+(y+k*gs/4)+'" stroke="'+O+'" stroke-width="1.8"/>'});
+    var mx=x+gs+g; h+=R(mx,y,gs,gs,4,'#0f2224',T,2)+'<path d="M'+(mx+4)+' '+(y+7.5)+'l5 -4.5l5 4.5M'+(mx+4)+' '+(y+10.5)+'l5 4.5l5 -4.5" fill="none" stroke="'+T+'" stroke-width="1.8"/>';
+  });
+  return h;
+}
 function renderVec(){
   var V=VEC[cur], tgt=R&&R.end&&R.end.f===cur&&R.end.n.t==='r'?R.end.n.l:'', src=R&&R.start&&R.start.f===cur&&R.start.n.t==='r'?R.start.n.l:'';
   var key=cur+'|'+tgt+'|'+src+'|'+(V?1:0); if(key===vecKey) return; vecKey=key;
   if(!V){vsvg.innerHTML=''; return}
+  if(V.box){vsvg.innerHTML=renderBox(V,tgt,src); return}
   var O='#ff9a3d', T='#2bc4bd', h='';
   h+='<path d="'+V.inside+'" fill="var(--bld)" stroke="var(--wall)" stroke-width="5" stroke-linejoin="round" fill-rule="evenodd"/>';
   h+='<path d="'+V.hall+'" fill="var(--hall)" fill-rule="evenodd"/>';

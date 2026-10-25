@@ -11,6 +11,8 @@ Outputs vec.json and seed.json next to this file.
 import json, os, cv2, numpy as np
 from skimage.morphology import skeletonize
 from floors import F
+from boxgen import build as build_box, CO as BCO, UP as BUP, LO as BLO, X0 as BX0, X1 as BX1, CORE_TOP as BCORE_TOP
+BOXF = {'5', '6', '7', '8', '9', '10', '11'}
 from wallvec import straight_walls, straight_poly_path, clean_walls, room_shape, snap_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -182,165 +184,194 @@ def rect_door(r, corr):
 vec, seed = {}, {}
 for f in ORDER:
     d = F[f]
-    im = cv2.imread(os.path.join(HERE, 'scans', f'f{f}.jpg'), 0)
-    H, W = im.shape
-    region = poly_mask(im.shape, d)
-    walls = walls_of(im, region, d.get('erase', ()))
-    wallsC = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    if f in BOXF:
+        B = build_box(f); OFF = 200; H, W = 520, 2600
+        sh = lambda y: y + OFF
+        hall = np.zeros((H, W), np.uint8)
+        for (a0, b0, a1, b1) in B['corr']:
+            cv2.rectangle(hall, (int(a0), int(sh(b0))), (int(a1) - 1, int(sh(b1)) - 1), 1, -1)
+        labelled, room_masks = [], []
+        for r in B['rooms']:
+            x0, x1, y0, y1 = int(r['x']), int(r['x'] + r['w']), int(sh(r['y'])), int(sh(r['y'] + r['h']))
+            labelled.append((r['l'], x0, x1, y0, y1, r['k'], tuple(r.get('al', ()))))
+            m = np.zeros((H, W), np.uint8); cv2.rectangle(m, (x0, y0), (x1 - 1, y1 - 1), 1, -1); room_masks.append(m)
+        cmid = sh((BCO[0] + BCO[1]) / 2)
+        d = dict(d, corr=[(int(a0), int(sh(b0)), int(a1), int(sh(b1))) for a0, b0, a1, b1 in B['corr']],
+                 st=[(l, hx, cmid) for l, hx in B['halls']], paths=[], ent=[])
+        rooms_out = []
+        for r in B['rooms']:
+            x, y, w, h = r['x'], sh(r['y']), r['w'], r['h']
+            o = {'l': r['l'], 'k': r['k'], 'x': x, 'y': y, 'w': w, 'h': h, 'p': f'M{x} {y}h{w}v{h}h{-w}Z',
+                 'lx': x + w / 2, 'ly': y + h / 2, 'r': min(w, h) / 2, 'bw': w, 'bh': h}
+            if r.get('al'):
+                o['al'] = r['al']
+            rooms_out.append(o)
+        vec[f] = {'box': 1, 'off': OFF, 'band': [BX0, sh(BUP[0]), BX1, sh(BLO[1])],
+                  'bb': [BX0 - 10, sh(BCORE_TOP) - 10, BX1 + 10, sh(BLO[1]) + 10],
+                  'corr': [[a0, sh(b0), a1 - a0, b1 - b0] for a0, b0, a1, b1 in B['corr']],
+                  'stubs': [[s['x'], sh(s['y']), s['w'], s['h']] for s in B['stubs']],
+                  'cores': [dict(c, y=sh(c['y']), lifts=[[lx, sh(ly), lw] for lx, ly, lw in c.get('lifts', [])]) for c in B['cores']],
+                  'rooms': rooms_out, 'labels': [], 'ent': [], 'paths': []}
+    else:
+        im = cv2.imread(os.path.join(HERE, 'scans', f'f{f}.jpg'), 0)
+        H, W = im.shape
+        region = poly_mask(im.shape, d)
+        walls = walls_of(im, region, d.get('erase', ()))
+        wallsC = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
 
-    # building interior: everything the outer walls enclose (seal small gaps first)
-    sealed = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
-    ext = (1 - sealed).astype(np.uint8)
-    ff = np.zeros((H + 2, W + 2), np.uint8)
-    for sx, sy in ((1, 1), (W - 2, 1), (1, H - 2), (W - 2, H - 2)):
-        if ext[sy, sx] == 1:
-            cv2.floodFill(ext, ff, (sx, sy), 2)
-    inside = (((ext != 2) | (cv2.erode(region, np.ones((15, 15), np.uint8)) > 0)) & (walls == 0)).astype(np.uint8)
-    inside &= cv2.dilate(region, np.ones((41, 41), np.uint8))
+        # building interior: everything the outer walls enclose (seal small gaps first)
+        sealed = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
+        ext = (1 - sealed).astype(np.uint8)
+        ff = np.zeros((H + 2, W + 2), np.uint8)
+        for sx, sy in ((1, 1), (W - 2, 1), (1, H - 2), (W - 2, H - 2)):
+            if ext[sy, sx] == 1:
+                cv2.floodFill(ext, ff, (sx, sy), 2)
+        inside = (((ext != 2) | (cv2.erode(region, np.ones((15, 15), np.uint8)) > 0)) & (walls == 0)).astype(np.uint8)
+        inside &= cv2.dilate(region, np.ones((41, 41), np.uint8))
 
-    # rooms: flood the real region around every labelled room, closing door gaps progressively
-    labelled = [r for r in d['rooms'] if r[0] and r[5] in ('room', 'place', 'wc', 'area')]
-    seeds = [((r[1] + r[2]) / 2, (r[3] + r[4]) / 2) for r in labelled]
-    room_masks = []
-    for idx, r in enumerate(labelled):
-        l, x0, x1, y0, y1, k, al = r
-        E = (x1 - x0) * (y1 - y0); sx, sy = seeds[idx]; got = None
-        for kk in (1, 5, 9, 13, 17, 23):
-            wk = walls if kk == 1 else cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((kk, kk), np.uint8))
-            free = (inside & (wk == 0)).astype(np.uint8)
-            m = flood(free, sx, sy)
-            if m is None:
-                continue
-            A = int(m.sum())
-            others = sum(1 for j, s in enumerate(seeds) if j != idx and m[int(s[1]), int(s[0])] if 0 <= int(s[1]) < H and 0 <= int(s[0]) < W)
-            if A <= 2.3 * E and A >= 0.55 * E and others == 0:
-                got = cv2.dilate(m.astype(np.uint8), np.ones((kk // 2 * 2 + 1,) * 2, np.uint8)) & (walls == 0)
-                break
-            if A < 0.55 * E:
-                continue
-        if got is None:  # merged with neighbours or open plan: real space inside the box
-            box = np.zeros_like(walls); cv2.rectangle(box, (x0, y0), (x1, y1), 1, -1)
-            got = box & (walls == 0) & inside if (box & inside).sum() > 0.3 * E else box
-        room_masks.append(got.astype(np.uint8))
-
-    rooms_all = np.zeros_like(walls)
-    for m in room_masks:
-        rooms_all |= m
-
-    # halls: free space within the corridor zones
-    zone = np.zeros_like(walls)
-    for (x0, y0, x1, y1) in d['corr']:
-        cv2.rectangle(zone, (x0 - 14, y0 - 14), (x1 + 14, y1 + 14), 1, -1)
-    hall = (inside & (wallsC == 0) & (rooms_all == 0) & zone).astype(np.uint8)
-    n, lab, st, _ = cv2.connectedComponentsWithStats(hall, 4)
-    for i in range(1, n):
-        if st[i][4] < 400:
-            hall[lab == i] = 0
-
-    # ---- vector output ----
-    # schematic: every room is a clean rectangle at its real place, no walls
-    boxes = []
-    for r, m in zip(labelled, room_masks):
-        l, x0, x1, y0, y1, k, al = r
-        ys, xs = np.nonzero(m)
-        if len(xs) > 20:
-            bx0, bx1 = np.percentile(xs, [2, 98]); by0, by1 = np.percentile(ys, [2, 98])
-        else:
-            bx0, bx1, by0, by1 = x0, x1, y0, y1
-        boxes.append([float(bx0), float(by0), float(bx1) + 1, float(by1) + 1])
-    for _ in range(3):  # split overlaps between neighbours at the middle
-        for i in range(len(boxes)):
-            for j in range(i + 1, len(boxes)):
-                a_, b_ = boxes[i], boxes[j]
-                ox = min(a_[2], b_[2]) - max(a_[0], b_[0]); oy = min(a_[3], b_[3]) - max(a_[1], b_[1])
-                if ox <= 0 or oy <= 0:
+        # rooms: flood the real region around every labelled room, closing door gaps progressively
+        labelled = [r for r in d['rooms'] if r[0] and r[5] in ('room', 'place', 'wc', 'area')]
+        seeds = [((r[1] + r[2]) / 2, (r[3] + r[4]) / 2) for r in labelled]
+        room_masks = []
+        for idx, r in enumerate(labelled):
+            l, x0, x1, y0, y1, k, al = r
+            E = (x1 - x0) * (y1 - y0); sx, sy = seeds[idx]; got = None
+            for kk in (1, 5, 9, 13, 17, 23):
+                wk = walls if kk == 1 else cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((kk, kk), np.uint8))
+                free = (inside & (wk == 0)).astype(np.uint8)
+                m = flood(free, sx, sy)
+                if m is None:
                     continue
-                if ox <= oy:
-                    if (a_[0] + a_[2]) < (b_[0] + b_[2]):
-                        m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; a_[2] = min(a_[2], m_); b_[0] = max(b_[0], m_)
-                    else:
-                        m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; b_[2] = min(b_[2], m_); a_[0] = max(a_[0], m_)
-                else:
-                    if (a_[1] + a_[3]) < (b_[1] + b_[3]):
-                        m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; a_[3] = min(a_[3], m_); b_[1] = max(b_[1], m_)
-                    else:
-                        m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; b_[3] = min(b_[3], m_); a_[1] = max(a_[1], m_)
-    # tidy rows/columns: box edges that are close get one shared coordinate
-    from wallvec import _cluster
-    for idxs in ((1, 3), (0, 2)):
-        vals = [(b[i], 1.0) for b in boxes for i in idxs]
-        if vals:
-            m_ = _cluster(vals, 12); k_ = 0
-            for b in boxes:
-                for i in idxs:
-                    b[i] = m_[k_]; k_ += 1
-    rooms_out = []
-    for r, b in zip(labelled, boxes):
-        l, x0, x1, y0, y1, k, al = r
-        g = 3  # gap between neighbouring boxes
-        X0, Y0, X1, Y1 = [int(round(v)) for v in (b[0] + g, b[1] + g, b[2] - g, b[3] - g)]
-        if X1 - X0 < 6 or Y1 - Y0 < 6:
-            X0, Y0, X1, Y1 = x0 + g, y0 + g, x1 - g, y1 - g
-        o = {'l': l, 'k': k, 'p': f'M{X0} {Y0}H{X1}V{Y1}H{X0}Z', 'x': X0, 'y': Y0, 'w': X1 - X0, 'h': Y1 - Y0,
-             'lx': (X0 + X1) // 2, 'ly': (Y0 + Y1) // 2, 'r': min(X1 - X0, Y1 - Y0) / 2, 'bw': X1 - X0, 'bh': Y1 - Y0}
-        if al:
-            o['al'] = list(al)
-        rooms_out.append(o)
-    # stair / lift cores: keep their real outline, replace the scanned hatching with clean symbols
-    halls_x = [x for _, x, _ in d['st']]
-    vwalls = walls.copy(); cores = []
-    for (x0, y0, x1, y1) in d['deco']:
-        X0, Y0, X1, Y1 = max(x0 - 6, 0), max(y0 - 6, 0), min(x1 + 6, W), min(y1 + 6, H)
-        ys_, xs_ = np.nonzero(walls[Y0:Y1, X0:X1])
-        if len(xs_) < 30:
-            continue
-        hull = cv2.convexHull(np.stack([xs_ + X0, ys_ + Y0], 1).astype(np.int32)).reshape(-1, 2)
-        hm = np.zeros_like(walls); cv2.fillPoly(hm, [hull], 1)
-        inner = cv2.erode(hm, np.ones((15, 15), np.uint8))
-        vwalls[inner > 0] = 0
-        main = any(abs(hx - (x0 + x1) / 2) < 110 for hx in halls_x)
-        top, bot = int(hull[:, 1].min()), int(hull[:, 1].max())
-        split = int(top + (bot - top) * 0.62) if main else top
-        boxes = []
-        if main:
-            y = top + 10
-            while True:
-                row = np.nonzero(inner[y])[0] if y < H else []
-                if len(row) < 12:
-                    y += 4
-                    if y > split - 12:
-                        break
-                    continue
-                cx = (row[0] + row[-1]) / 2; s = min(row[-1] - row[0] - 4, 30)
-                if y + s > split:
+                A = int(m.sum())
+                others = sum(1 for j, s in enumerate(seeds) if j != idx and m[int(s[1]), int(s[0])] if 0 <= int(s[1]) < H and 0 <= int(s[0]) < W)
+                if A <= 2.3 * E and A >= 0.55 * E and others == 0:
+                    got = cv2.dilate(m.astype(np.uint8), np.ones((kk // 2 * 2 + 1,) * 2, np.uint8)) & (walls == 0)
                     break
-                boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
-        hx0, hy0, hx1, hy1 = int(hull[:, 0].min()), int(hull[:, 1].min()), int(hull[:, 0].max()), int(hull[:, 1].max())
-        cores.append({'pts': [[hx0, hy0], [hx1, hy0], [hx1, hy1], [hx0, hy1]], 'split': split, 'main': bool(main), 'boxes': boxes,
-                      'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
-    # interiors whose inner lines (seating, furniture, scan junk) are dropped: rooms + their boxes
-    clutter = cv2.erode(rooms_all, np.ones((11, 11), np.uint8))
-    for r in labelled:
-        l, x0, x1, y0, y1 = r[:5]
-        if x1 - x0 > 30 and y1 - y0 > 30:
-            cv2.rectangle(clutter, (x0 + 9, y0 + 9), (x1 - 9, y1 - 9), 1, -1)
-    for r in d['rooms']:
-        if r[5] == 'svc' and r[2] - r[1] > 30 and r[4] - r[3] > 30:
-            cv2.rectangle(clutter, (r[1] + 9, r[3] + 9), (r[2] - 9, r[4] - 9), 1, -1)
-    clutter = ((clutter & (hall == 0)) | cv2.erode(hall, np.ones((9, 9), np.uint8))).astype(np.uint8)
-    wy, wx = np.nonzero(walls)
-    vec[f] = {
-        'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
-        'wl': [],
-        'cores': cores,
-        'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=10, min_area=4000),
-        'hall': straight_poly_path(cv2.morphologyEx(hall, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8)), eps=8, min_area=600),
-        'rooms': rooms_out,
-        'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
-        'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],
-        'paths': [{'a': A, 'b': B, 'w': w} for A, B, w in d.get('paths', [])],
-        'labels': [{'t': t, 'x': x, 'y': y} for t, x, y in d['lab']],
-    }
+                if A < 0.55 * E:
+                    continue
+            if got is None:  # merged with neighbours or open plan: real space inside the box
+                box = np.zeros_like(walls); cv2.rectangle(box, (x0, y0), (x1, y1), 1, -1)
+                got = box & (walls == 0) & inside if (box & inside).sum() > 0.3 * E else box
+            room_masks.append(got.astype(np.uint8))
+
+        rooms_all = np.zeros_like(walls)
+        for m in room_masks:
+            rooms_all |= m
+
+        # halls: free space within the corridor zones
+        zone = np.zeros_like(walls)
+        for (x0, y0, x1, y1) in d['corr']:
+            cv2.rectangle(zone, (x0 - 14, y0 - 14), (x1 + 14, y1 + 14), 1, -1)
+        hall = (inside & (wallsC == 0) & (rooms_all == 0) & zone).astype(np.uint8)
+        n, lab, st, _ = cv2.connectedComponentsWithStats(hall, 4)
+        for i in range(1, n):
+            if st[i][4] < 400:
+                hall[lab == i] = 0
+
+        # ---- vector output ----
+        # schematic: every room is a clean rectangle at its real place, no walls
+        boxes = []
+        for r, m in zip(labelled, room_masks):
+            l, x0, x1, y0, y1, k, al = r
+            ys, xs = np.nonzero(m)
+            if len(xs) > 20:
+                bx0, bx1 = np.percentile(xs, [2, 98]); by0, by1 = np.percentile(ys, [2, 98])
+            else:
+                bx0, bx1, by0, by1 = x0, x1, y0, y1
+            boxes.append([float(bx0), float(by0), float(bx1) + 1, float(by1) + 1])
+        for _ in range(3):  # split overlaps between neighbours at the middle
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    a_, b_ = boxes[i], boxes[j]
+                    ox = min(a_[2], b_[2]) - max(a_[0], b_[0]); oy = min(a_[3], b_[3]) - max(a_[1], b_[1])
+                    if ox <= 0 or oy <= 0:
+                        continue
+                    if ox <= oy:
+                        if (a_[0] + a_[2]) < (b_[0] + b_[2]):
+                            m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; a_[2] = min(a_[2], m_); b_[0] = max(b_[0], m_)
+                        else:
+                            m_ = (max(a_[0], b_[0]) + min(a_[2], b_[2])) / 2; b_[2] = min(b_[2], m_); a_[0] = max(a_[0], m_)
+                    else:
+                        if (a_[1] + a_[3]) < (b_[1] + b_[3]):
+                            m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; a_[3] = min(a_[3], m_); b_[1] = max(b_[1], m_)
+                        else:
+                            m_ = (max(a_[1], b_[1]) + min(a_[3], b_[3])) / 2; b_[3] = min(b_[3], m_); a_[1] = max(a_[1], m_)
+        # tidy rows/columns: box edges that are close get one shared coordinate
+        from wallvec import _cluster
+        for idxs in ((1, 3), (0, 2)):
+            vals = [(b[i], 1.0) for b in boxes for i in idxs]
+            if vals:
+                m_ = _cluster(vals, 12); k_ = 0
+                for b in boxes:
+                    for i in idxs:
+                        b[i] = m_[k_]; k_ += 1
+        rooms_out = []
+        for r, b in zip(labelled, boxes):
+            l, x0, x1, y0, y1, k, al = r
+            g = 3  # gap between neighbouring boxes
+            X0, Y0, X1, Y1 = [int(round(v)) for v in (b[0] + g, b[1] + g, b[2] - g, b[3] - g)]
+            if X1 - X0 < 6 or Y1 - Y0 < 6:
+                X0, Y0, X1, Y1 = x0 + g, y0 + g, x1 - g, y1 - g
+            o = {'l': l, 'k': k, 'p': f'M{X0} {Y0}H{X1}V{Y1}H{X0}Z', 'x': X0, 'y': Y0, 'w': X1 - X0, 'h': Y1 - Y0,
+                 'lx': (X0 + X1) // 2, 'ly': (Y0 + Y1) // 2, 'r': min(X1 - X0, Y1 - Y0) / 2, 'bw': X1 - X0, 'bh': Y1 - Y0}
+            if al:
+                o['al'] = list(al)
+            rooms_out.append(o)
+        # stair / lift cores: keep their real outline, replace the scanned hatching with clean symbols
+        halls_x = [x for _, x, _ in d['st']]
+        vwalls = walls.copy(); cores = []
+        for (x0, y0, x1, y1) in d['deco']:
+            X0, Y0, X1, Y1 = max(x0 - 6, 0), max(y0 - 6, 0), min(x1 + 6, W), min(y1 + 6, H)
+            ys_, xs_ = np.nonzero(walls[Y0:Y1, X0:X1])
+            if len(xs_) < 30:
+                continue
+            hull = cv2.convexHull(np.stack([xs_ + X0, ys_ + Y0], 1).astype(np.int32)).reshape(-1, 2)
+            hm = np.zeros_like(walls); cv2.fillPoly(hm, [hull], 1)
+            inner = cv2.erode(hm, np.ones((15, 15), np.uint8))
+            vwalls[inner > 0] = 0
+            main = any(abs(hx - (x0 + x1) / 2) < 110 for hx in halls_x)
+            top, bot = int(hull[:, 1].min()), int(hull[:, 1].max())
+            split = int(top + (bot - top) * 0.62) if main else top
+            boxes = []
+            if main:
+                y = top + 10
+                while True:
+                    row = np.nonzero(inner[y])[0] if y < H else []
+                    if len(row) < 12:
+                        y += 4
+                        if y > split - 12:
+                            break
+                        continue
+                    cx = (row[0] + row[-1]) / 2; s = min(row[-1] - row[0] - 4, 30)
+                    if y + s > split:
+                        break
+                    boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
+            hx0, hy0, hx1, hy1 = int(hull[:, 0].min()), int(hull[:, 1].min()), int(hull[:, 0].max()), int(hull[:, 1].max())
+            cores.append({'pts': [[hx0, hy0], [hx1, hy0], [hx1, hy1], [hx0, hy1]], 'split': split, 'main': bool(main), 'boxes': boxes,
+                          'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
+        # interiors whose inner lines (seating, furniture, scan junk) are dropped: rooms + their boxes
+        clutter = cv2.erode(rooms_all, np.ones((11, 11), np.uint8))
+        for r in labelled:
+            l, x0, x1, y0, y1 = r[:5]
+            if x1 - x0 > 30 and y1 - y0 > 30:
+                cv2.rectangle(clutter, (x0 + 9, y0 + 9), (x1 - 9, y1 - 9), 1, -1)
+        for r in d['rooms']:
+            if r[5] == 'svc' and r[2] - r[1] > 30 and r[4] - r[3] > 30:
+                cv2.rectangle(clutter, (r[1] + 9, r[3] + 9), (r[2] - 9, r[4] - 9), 1, -1)
+        clutter = ((clutter & (hall == 0)) | cv2.erode(hall, np.ones((9, 9), np.uint8))).astype(np.uint8)
+        wy, wx = np.nonzero(walls)
+        vec[f] = {
+            'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
+            'wl': [],
+            'cores': cores,
+            'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=10, min_area=4000),
+            'hall': straight_poly_path(cv2.morphologyEx(hall, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8)), eps=8, min_area=600),
+            'rooms': rooms_out,
+            'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
+            'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],
+            'paths': [{'a': A, 'b': B, 'w': w} for A, B, w in d.get('paths', [])],
+            'labels': [{'t': t, 'x': x, 'y': y} for t, x, y in d['lab']],
+        }
 
     # ---- routing graph along the hall centre lines ----
     pts, sk_edges = skeleton_graph(hall)
@@ -418,6 +449,8 @@ for f in ORDER:
                 continue
             k = max(2, int(dd[j] / 4))
             xs = np.linspace(XY[i, 0], XY[j, 0], k).round().astype(int); ys = np.linspace(XY[i, 1], XY[j, 1], k).round().astype(int)
+            if f in BOXF and abs(XY[j, 0] - XY[i, 0]) > 3 and abs(XY[j, 1] - XY[i, 1]) > 3:
+                continue  # schematic floors: only straight corridor runs
             if walk[ys, xs].all():
                 key2 = tuple(sorted((nodes[i]['id'], nodes[j]['id'])))
                 if key2 not in existing:
