@@ -433,7 +433,7 @@ function renderVec(){
     var col=isT||isS?'#fff':wc?'#c4b8ff':named?(r.k==='place'?'#aab4c6':'#5d6678'):'#e9eefc';
     lab+='<text x="'+r.lx+'" y="'+r.ly+'" font-size="'+fs.toFixed(1)+'"'+(named?' font-weight="600"':'')+' fill="'+col+'"'+(vert?' transform="rotate(-90 '+r.lx+' '+r.ly+')"':'')+'>'+esc(r.l)+'</text>';
   });
-  (V.wl||[]).forEach(function(g){h+='<path d="'+g[1]+'" fill="none" stroke="var(--wall)" stroke-width="'+g[0]+'" stroke-linecap="round" stroke-linejoin="round"/>'});
+  (V.wl||[]).forEach(function(g){h+='<path d="'+g[1]+'" fill="none" stroke="var(--wall)" stroke-width="'+g[0]+'" stroke-linecap="square" stroke-linejoin="miter"/>'});
   (V.labels||[]).forEach(function(l){h+='<text x="'+l.x+'" y="'+l.y+'" font-family="Montserrat,sans-serif" font-weight="600" font-size="30" fill="#3a4252" text-anchor="middle" letter-spacing="4">'+esc(l.t.toUpperCase())+'</text>'});
   h+='<g class="rm">'+lab+'</g>';
   // stairs | lift hall | stairs  — the "*|*" sign

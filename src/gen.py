@@ -11,7 +11,7 @@ Outputs vec.json and seed.json next to this file.
 import json, os, cv2, numpy as np
 from skimage.morphology import skeletonize
 from floors import F
-from wallvec import straight_walls, straight_poly_path
+from wallvec import straight_walls, straight_poly_path, clean_walls, room_shape, snap_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ORDER = ['1a', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
@@ -241,7 +241,7 @@ for f in ORDER:
     rooms_out = []
     for r, m in zip(labelled, room_masks):
         l, x0, x1, y0, y1, k, al = r
-        p = straight_poly_path(cv2.dilate(m, np.ones((3, 3), np.uint8)) & (inside | walls), eps=3.0, min_area=20)
+        p = room_shape(cv2.dilate(m, np.ones((3, 3), np.uint8)) & (inside | walls))
         lx, ly, rad = label_spot(m)
         ys, xs = np.nonzero(m)
         bw, bh = (xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) if len(xs) else (x1 - x0, y1 - y0)
@@ -278,15 +278,15 @@ for f in ORDER:
                 if y + s > split:
                     break
                 boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
-        cores.append({'pts': hull.tolist(), 'split': split, 'main': bool(main), 'boxes': boxes,
+        cores.append({'pts': snap_poly(hull.tolist()), 'split': split, 'main': bool(main), 'boxes': boxes,
                       'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
     wy, wx = np.nonzero(walls)
     vec[f] = {
         'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
-        'wl': straight_walls(vwalls),
+        'wl': clean_walls(vwalls, cv2.erode(rooms_all, np.ones((13, 13), np.uint8))),
         'cores': cores,
         'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=3.5, min_area=2000),
-        'hall': straight_poly_path(cv2.dilate(hall, np.ones((5, 5), np.uint8)), eps=3.0, min_area=300),
+        'hall': straight_poly_path(cv2.dilate(hall, np.ones((5, 5), np.uint8)), eps=6.0, min_area=300),
         'rooms': rooms_out,
         'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
         'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],
