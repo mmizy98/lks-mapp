@@ -17,7 +17,7 @@ html,body{height:100%}
 body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.35;overflow:hidden}
 *{box-sizing:border-box}
 button,input,textarea{font:inherit;color:inherit}
-#app{height:100%;display:flex;flex-direction:column;min-height:0}
+#app{height:100%;display:flex;flex-direction:column;min-height:0;padding-bottom:env(safe-area-inset-bottom,0px)}
 .band{padding-left:var(--gx);padding-right:var(--gx2)}
 #top{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-block:10px;background:var(--brand)}
 #top .brand{display:flex;align-items:center;gap:10px;min-width:0}
@@ -70,7 +70,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 #ov text{font-family:var(--sans);font-weight:700;paint-order:stroke;stroke:#000;stroke-linejoin:round;fill:#fff}
 .zoom{position:absolute;right:max(10px,env(safe-area-inset-right,0px));bottom:10px;display:flex;flex-direction:column;gap:6px}
 .zoom button{width:42px;height:42px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg);cursor:pointer;font-size:18px;line-height:1}
-#legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:12px;display:flex;align-items:center;gap:4px;background:rgba(13,13,15,.88);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:11px;font-weight:600;color:var(--muted)}
+#legend{position:absolute;left:max(10px,env(safe-area-inset-left,0px));bottom:10px;display:flex;align-items:center;gap:4px;background:rgba(13,13,15,.88);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:11px;font-weight:600;color:var(--muted)}
 #legend span{display:inline-block;width:12px;height:12px;border-radius:3px}
 #legend .lg-st{border:1.5px solid #ff9a3d;background:repeating-linear-gradient(#1f1812 0 2px,#ff9a3d 2px 3px)}
 #legend .lg-lf{border:1.5px solid #2bc4bd;background:#0f2224}
@@ -86,9 +86,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 #steps li:hover{background:var(--soft)}
 #steps .fl{flex:none;min-width:34px;font-weight:800;color:var(--accent-hi)}
 #steps .up{color:var(--muted);cursor:default}
-#floors{background:var(--surface);border-top:1px solid var(--line);padding-block:8px;display:flex;gap:6px;align-items:center;overflow-x:auto}
-#floors .lab{flex:none;color:var(--muted);font-size:12px;margin-right:2px}
-#floors button{flex:none;position:relative;min-width:44px;height:38px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;font-weight:700}
+/* floors: vertical «elevator» column over the map, away from the iPhone home-indicator edge */
+#floors{position:absolute;left:max(10px,env(safe-area-inset-left,0px));top:10px;max-height:calc(100% - 62px);z-index:4;display:flex;flex-direction:column;gap:5px;overflow-y:auto;padding:5px;background:rgba(13,13,15,.85);border:1px solid var(--line);border-radius:14px;scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+#floors::-webkit-scrollbar{display:none}
+#floors .lab{flex:none;color:var(--muted);font-size:10px;font-weight:600;text-align:center;padding:2px 0}
+#floors button{flex:none;position:relative;width:44px;min-height:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;font-weight:700}
 #floors button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 #floors button.has::after{content:"";position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--route);box-shadow:0 0 0 2px var(--card)}
 #floors button[aria-pressed="true"].has::after{background:#fff;box-shadow:0 0 0 2px var(--accent)}
@@ -134,6 +136,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
     <div id="stage"><img id="plan" alt="План этажа" draggable="false"><svg id="vec"></svg><svg id="ov"></svg></div>
     <div id="loading">Загружаю план…</div>
     <div id="legend" aria-hidden="true"><i><span class="lg-st"></span><span class="lg-lf"></span><span class="lg-st"></span></i> лестницы и лифтовый холл <span class="lg-wc"></span> туалет <span class="lg-en"></span> вход</div>
+    <nav id="floors" aria-label="Этажи"></nav>
     <div class="zoom">
       <button id="zIn" aria-label="Приблизить">+</button>
       <button id="zOut" aria-label="Отдалить">−</button>
@@ -146,7 +149,6 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
     <ol id="steps"></ol>
   </section>
 
-  <nav id="floors" class="band" aria-label="Этажи"></nav>
 </div>
 
 <script>
@@ -345,8 +347,9 @@ function fitAll(){
 }
 function fitBox(b){
   var r=map.getBoundingClientRect(), pad=60, w=Math.max(b.x1-b.x0,200)+pad*2, h=Math.max(b.y1-b.y0,200)+pad*2;
-  var s=Math.min(r.width/w,r.height/h,1.1); view.s=Math.max(s,0.05);
-  view.tx=r.width/2-((b.x0+b.x1)/2)*view.s; view.ty=r.height/2-((b.y0+b.y1)/2)*view.s; applyView();
+  var L=64, R2=56, aw=Math.max(r.width-L-R2,100); // floor column on the left, zoom buttons on the right
+  var s=Math.min(aw/w,r.height/h,1.1); view.s=Math.max(s,0.05);
+  view.tx=L+aw/2-((b.x0+b.x1)/2)*view.s; view.ty=r.height/2-((b.y0+b.y1)/2)*view.s; applyView();
 }
 function fitRoute(){
   if(!R) return fitAll();
@@ -378,11 +381,12 @@ function setFloor(f,keepView){
 }
 function renderFloors(){
   var h='<span class="lab">Этаж</span>';
-  FLOORS.forEach(function(f){
+  FLOORS.slice().reverse().forEach(function(f){
     var has=R&&R.floors.indexOf(f)>=0, empty=!G[f].nodes.length;
     h+='<button data-f="'+f+'" aria-pressed="'+(f===cur)+'" class="'+(has?'has ':'')+(empty?'empty':'')+'" aria-label="Этаж '+f+'">'+f+'</button>';
   });
   $('#floors').innerHTML=h;
+  var on=$('#floors button[aria-pressed="true"]'); if(on&&on.scrollIntoView) try{on.scrollIntoView({block:'nearest'})}catch(e){}
 }
 $('#floors').addEventListener('click',function(e){var b=e.target.closest('button[data-f]'); if(b&&b.getAttribute('data-f')!==cur) setFloor(b.getAttribute('data-f'))});
 $('#zIn').addEventListener('click',function(){var r=map.getBoundingClientRect(); zoomAt(r.width/2,r.height/2,1.4)});
@@ -546,7 +550,7 @@ function hitEdge(ip){
   return best;
 }
 map.addEventListener('pointerdown',function(e){
-  if(e.target.closest('.zoom')) return;
+  if(e.target.closest('.zoom')||e.target.closest('#floors')) return;
   map.setPointerCapture(e.pointerId); var p=localXY(e); ptrs[e.pointerId]={x:p.x,y:p.y};
   var ids=Object.keys(ptrs);
   if(ids.length===1){
@@ -577,7 +581,7 @@ function endPtr(e){
   if(!g.moved&&p&&Date.now()-g.t0<600&&e.type==='pointerup'&&g.type!=='pinch') onTap(toImg(p),g);
 }
 map.addEventListener('pointerup',endPtr); map.addEventListener('pointercancel',endPtr);
-map.addEventListener('wheel',function(e){e.preventDefault(); var p=localXY(e); zoomAt(p.x,p.y,e.deltaY<0?1.15:1/1.15)},{passive:false});
+map.addEventListener('wheel',function(e){if(e.target.closest('#floors')) return; e.preventDefault(); var p=localXY(e); zoomAt(p.x,p.y,e.deltaY<0?1.15:1/1.15)},{passive:false});
 
 /* ---------- editor ---------- */
 var TOOLS=[['move','Двигать'],['r','Аудитория'],['c','Коридор'],['s','Лестница'],['l','Лифт'],['e','Вход'],['link','Связать'],['del','Удалить']];

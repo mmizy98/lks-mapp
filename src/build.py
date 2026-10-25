@@ -8,7 +8,7 @@ page=t.replace('/*SEED*/null',open('seed.json',encoding='utf8').read()).replace(
 title=re.search(r'<title>.*?</title>',page).group(0); body=page.replace(title,'',1)
 body=body.replace('<meta name="claude:viewport-fit-sides" content="cover">','',1)
 fonts=re.search(r'<link rel="stylesheet"[^>]+>',body).group(0); body=body.replace(fonts,'',1)
-css='<style>.seg{display:none!important}#floors{padding-bottom:max(8px,env(safe-area-inset-bottom,0px))}#legend{bottom:12px}</style>'
+css='<style>.seg{display:none!important}#app{padding-bottom:max(14px,env(safe-area-inset-bottom,0px))}#legend{bottom:12px}</style>'
 html=('<!doctype html>\n<html lang="ru"><head><meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">\n'
       +title+'\n<meta name="theme-color" content="#0a52ad">\n<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'+fonts+'\n'
       '<script src="https://telegram.org/js/telegram-web-app.js"></script>\n<script>window.ULK_NOSCAN=true</script>\n'
