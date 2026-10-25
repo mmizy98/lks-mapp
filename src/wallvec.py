@@ -156,7 +156,7 @@ def straight_poly_path(mask, eps=3.0, min_area=30):
     return ''.join(out)
 
 
-def clean_walls(mask, clutter=None, snap_deg=15, align=7, min_len=20):
+def clean_walls(mask, clutter=None, snap_deg=20, align=10, min_len=24):
     """'Pretty 2D' walls: only straight lines, mostly orthogonal, merged runs, two thicknesses.
     Fidelity is traded for a clean look: near-axis walls become exactly axis-aligned,
     parallel walls a few px apart share one line, furniture/seating inside rooms is dropped."""
@@ -214,7 +214,7 @@ def clean_walls(mask, clutter=None, snap_deg=15, align=7, min_len=20):
     for (a, b, t), kd in zip(segs, kinds):
         (x0, y0), (x1, y1) = V[a], V[b]
         mx, my = int((x0 + x1) / 2), int((y0 + y1) / 2)
-        if clutter is not None and 0 <= my < clutter.shape[0] and 0 <= mx < clutter.shape[1] and clutter[my, mx] and t < 5.5:
+        if clutter is not None and 0 <= my < clutter.shape[0] and 0 <= mx < clutter.shape[1] and clutter[my, mx]:
             continue
         w = 7 if t >= 5.5 else 3.5
         if kd == 'h' or (kd != 'v' and y0 == y1):
@@ -250,8 +250,29 @@ def clean_walls(mask, clutter=None, snap_deg=15, align=7, min_len=20):
         for w, x0, y0, x1, y1 in segs2:
             cv2.line(r, (int(x0 / 2), int(y0 / 2)), (int(x1 / 2), int(y1 / 2)), 1, 3)
         n, lab, st, _ = cv2.connectedComponentsWithStats(r, 8)
-        big = np.array([max(st[i][2], st[i][3]) >= 30 for i in range(n)])
+        big = np.array([max(st[i][2], st[i][3]) >= 45 for i in range(n)])
         segs2 = [s for s in segs2 if big[lab[int((s[2] + s[4]) / 4), int((s[1] + s[3]) / 4)]]]
+    # prune dangling stubs: short pieces with a loose end (door jambs, frame ticks), a few rounds
+    def ends_of(s):
+        return ((s[1], s[2]), (s[3], s[4]))
+    def touches(p, s):
+        w, x0, y0, x1, y1 = s
+        dx, dy = x1 - x0, y1 - y0; L2 = dx * dx + dy * dy or 1
+        u = max(0, min(1, ((p[0] - x0) * dx + (p[1] - y0) * dy) / L2))
+        return (p[0] - x0 - u * dx) ** 2 + (p[1] - y0 - u * dy) ** 2 <= 36
+    for _ in range(3):
+        keep = []
+        for i, s in enumerate(segs2):
+            L = abs(s[3] - s[1]) + abs(s[4] - s[2])
+            if L >= 34:
+                keep.append(s); continue
+            near = [o for j, o in enumerate(segs2) if j != i and min(o[1], o[3]) - 8 <= max(s[1], s[3]) and max(o[1], o[3]) + 8 >= min(s[1], s[3]) and min(o[2], o[4]) - 8 <= max(s[2], s[4]) and max(o[2], o[4]) + 8 >= min(s[2], s[4])]
+            a_, b_ = ends_of(s)
+            if any(touches(a_, o) for o in near) and any(touches(b_, o) for o in near):
+                keep.append(s)
+        if len(keep) == len(segs2):
+            break
+        segs2 = keep
     paths = {}
     for w, x0, y0, x1, y1 in segs2:
         if y0 == y1:

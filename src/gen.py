@@ -213,10 +213,10 @@ for f in ORDER:
                 continue
             A = int(m.sum())
             others = sum(1 for j, s in enumerate(seeds) if j != idx and m[int(s[1]), int(s[0])] if 0 <= int(s[1]) < H and 0 <= int(s[0]) < W)
-            if A <= 2.3 * E and A >= 0.2 * E and others == 0:
+            if A <= 2.3 * E and A >= 0.55 * E and others == 0:
                 got = cv2.dilate(m.astype(np.uint8), np.ones((kk // 2 * 2 + 1,) * 2, np.uint8)) & (walls == 0)
                 break
-            if A < 0.2 * E:
+            if A < 0.55 * E:
                 continue
         if got is None:  # merged with neighbours or open plan: real space inside the box
             box = np.zeros_like(walls); cv2.rectangle(box, (x0, y0), (x1, y1), 1, -1)
@@ -280,10 +280,20 @@ for f in ORDER:
                 boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
         cores.append({'pts': snap_poly(hull.tolist()), 'split': split, 'main': bool(main), 'boxes': boxes,
                       'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
+    # interiors whose inner lines (seating, furniture, scan junk) are dropped: rooms + their boxes
+    clutter = cv2.erode(rooms_all, np.ones((11, 11), np.uint8))
+    for r in labelled:
+        l, x0, x1, y0, y1 = r[:5]
+        if x1 - x0 > 30 and y1 - y0 > 30:
+            cv2.rectangle(clutter, (x0 + 9, y0 + 9), (x1 - 9, y1 - 9), 1, -1)
+    for r in d['rooms']:
+        if r[5] == 'svc' and r[2] - r[1] > 30 and r[4] - r[3] > 30:
+            cv2.rectangle(clutter, (r[1] + 9, r[3] + 9), (r[2] - 9, r[4] - 9), 1, -1)
+    clutter = ((clutter & (hall == 0)) | cv2.erode(hall, np.ones((9, 9), np.uint8))).astype(np.uint8)
     wy, wx = np.nonzero(walls)
     vec[f] = {
         'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
-        'wl': clean_walls(vwalls, cv2.erode(rooms_all, np.ones((13, 13), np.uint8))),
+        'wl': clean_walls(vwalls, clutter),
         'cores': cores,
         'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=3.5, min_area=2000),
         'hall': straight_poly_path(cv2.dilate(hall, np.ones((5, 5), np.uint8)), eps=6.0, min_area=300),
