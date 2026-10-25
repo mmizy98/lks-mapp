@@ -1,62 +1,394 @@
-import json
+"""Builds vector map data and the routing graph from the scans + floors.py.
+
+Geometry comes from the scans themselves (src/scans/f*.jpg):
+  * walls   – dark strokes of the plan, minus text, dots and the grid, vectorised;
+  * rooms   – the real enclosed region around each room label (flood fill between walls);
+  * halls   – free space inside the corridor zones from floors.py;
+  * routes  – along the skeleton (centre line) of the halls.
+floors.py only says *what* is where (room numbers, kinds, rough boxes); the shapes are traced.
+Outputs vec.json and seed.json next to this file.
+"""
+import json, os, cv2, numpy as np
+from skimage.morphology import skeletonize
 from floors import F
-ORDER=['1a','1','2','3','4','5','6','7','8','9','10','11']
-vec={}; seed={}
-def proj(c,x,y):
-    x0,y0,x1,y1=c
-    if (x1-x0)>=(y1-y0): return (min(max(x,x0+4),x1-4),(y0+y1)/2)
-    return ((x0+x1)/2,min(max(y,y0+4),y1-4))
-def dist(c,x,y):
-    x0,y0,x1,y1=c; dx=max(x0-x,0,x-x1); dy=max(y0-y,0,y-y1); return (dx*dx+dy*dy)**.5
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ORDER = ['1a', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+THR, MINLEN, MINAREA = 130, 45, 60
+
+
+def path_from_mask(mask, eps=1.2, min_area=30):
+    """Mask -> SVG path (evenodd), holes included."""
+    cs, hier = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    out = []
+    for c in cs:
+        if abs(cv2.contourArea(c)) < min_area:
+            continue
+        a = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(a) < 3:
+            continue
+        out.append('M' + 'L'.join(f'{x} {y}' for x, y in a) + 'Z')
+    return ''.join(out)
+
+
+def poly_mask(shape, d):
+    """Rasterise floors.py outline paths (M/L/Q/H/V/Z subset) to a mask."""
+    m = np.zeros(shape, np.uint8)
+    import re
+    for p in d['out']:
+        toks = re.findall(r'[MLQHVZ]|-?\d+(?:\.\d+)?', p)
+        pts, i, cmd, cur = [], 0, None, (0, 0)
+        polys = []
+        while i < len(toks):
+            t = toks[i]
+            if t in 'MLQHVZ':
+                cmd = t; i += 1
+                if t == 'Z':
+                    polys.append(pts); pts = []
+                continue
+            if cmd in 'ML':
+                cur = (float(toks[i]), float(toks[i + 1])); pts.append(cur); i += 2
+            elif cmd == 'H':
+                cur = (float(t), cur[1]); pts.append(cur); i += 1
+            elif cmd == 'V':
+                cur = (cur[0], float(t)); pts.append(cur); i += 1
+            elif cmd == 'Q':
+                cx, cy, x, y = map(float, toks[i:i + 4]); x0, y0 = cur
+                for s in np.linspace(0, 1, 16)[1:]:
+                    pts.append(((1 - s) ** 2 * x0 + 2 * (1 - s) * s * cx + s * s * x, (1 - s) ** 2 * y0 + 2 * (1 - s) * s * cy + s * s * y))
+                cur = (x, y); i += 4
+        if pts:
+            polys.append(pts)
+        for q in polys:
+            cv2.fillPoly(m, [np.array(q, np.int32)], 1)
+    for (x0, y0, x1, y1) in d.get('deco', []):
+        cv2.rectangle(m, (x0, y0), (x1, y1), 1, -1)
+    return m
+
+
+def walls_of(im, region, erase=()):
+    dark = (im < THR).astype(np.uint8)
+    for (x0, y0, x1, y1) in erase:
+        dark[y0:y1, x0:x1] = 0
+    n, lab, st, _ = cv2.connectedComponentsWithStats(dark, 8)
+    keep = np.zeros(n, bool)
+    near = cv2.dilate(region, np.ones((41, 41), np.uint8))
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if max(w, h) >= MINLEN and a >= MINAREA and near[y:y + h, x:x + w].any():
+            keep[i] = True
+    return keep[lab].astype(np.uint8)
+
+
+def comp_at(free, x, y, r=18):
+    H, W = free.shape
+    x, y = int(round(x)), int(round(y))
+    best = None
+    for dy in range(-r, r + 1, 2):
+        for dx in range(-r, r + 1, 2):
+            xx, yy = x + dx, y + dy
+            if 0 <= xx < W and 0 <= yy < H and free[yy, xx]:
+                dd = dx * dx + dy * dy
+                if best is None or dd < best[0]:
+                    best = (dd, xx, yy)
+    return None if best is None else (best[1], best[2])
+
+
+def flood(free, x, y):
+    p = comp_at(free, x, y)
+    if p is None:
+        return None
+    m = np.zeros((free.shape[0] + 2, free.shape[1] + 2), np.uint8)
+    img = free.copy()
+    cv2.floodFill(img, m, p, 2, flags=8)
+    return img == 2
+
+
+def label_spot(mask):
+    dt = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    y, x = np.unravel_index(np.argmax(dt), dt.shape)
+    return int(x), int(y), float(dt[y, x])
+
+
+def skeleton_graph(hall):
+    """Hall mask -> list of (points, edges) along its centre line (on a 2x downsampled grid)."""
+    small = cv2.resize(hall.astype(np.uint8), (hall.shape[1] // 2, hall.shape[0] // 2), interpolation=cv2.INTER_NEAREST)
+    small = cv2.morphologyEx(small, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    sk = skeletonize(small > 0)
+    ys, xs = np.nonzero(sk)
+    pix = set(zip(xs.tolist(), ys.tolist()))
+    nb = lambda p: [(p[0] + dx, p[1] + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if (dx or dy) and (p[0] + dx, p[1] + dy) in pix]
+    deg = {p: len(nb(p)) for p in pix}
+    nodes = {p for p in pix if deg[p] != 2}
+    seen = set(); edges = []
+    def walk(a, b):
+        path = [a, b]; prev, cur = a, b
+        while cur not in nodes:
+            nxt = [q for q in nb(cur) if q != prev and (cur, q) not in seen]
+            if not nxt:
+                break
+            seen.add((cur, nxt[0])); seen.add((nxt[0], cur))
+            prev, cur = cur, nxt[0]; path.append(cur)
+        return path
+    for a in list(nodes):
+        for b in nb(a):
+            if (a, b) in seen:
+                continue
+            seen.add((a, b)); seen.add((b, a))
+            edges.append(walk(a, b))
+    left = [p for p in pix if p not in nodes and not any((p, q) in seen for q in nb(p))]
+    for p in left:  # closed loops without junctions
+        if any((p, q) in seen for q in nb(p)):
+            continue
+        nodes.add(p)
+        for b in nb(p):
+            if (p, b) not in seen:
+                seen.add((p, b)); seen.add((b, p)); edges.append(walk(p, b))
+    # simplify each edge polyline, scale back x2
+    out_pts = {}; out_edges = []
+    def key(p):
+        k = (p[0] * 2, p[1] * 2)
+        out_pts.setdefault(k, len(out_pts)); return out_pts[k]
+    for e in edges:
+        if len(e) < 2:
+            continue
+        arr = np.array(e, np.int32).reshape(-1, 1, 2)
+        s = cv2.approxPolyDP(arr, 1.5, False).reshape(-1, 2)
+        ks = [key(tuple(p)) for p in s]
+        for a, b in zip(ks, ks[1:]):
+            if a != b:
+                out_edges.append((a, b))
+    pts = [None] * len(out_pts)
+    for k, i in out_pts.items():
+        pts[i] = k
+    return pts, out_edges
+
+
+def rect_door(r, corr):
+    """Door estimate from the old box model: middle of the side that faces the nearest corridor box."""
+    l, x0, x1, y0, y1 = r[:5]
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    def dist(c):
+        a, b, c2, d = c; dx = max(a - cx, 0, cx - c2); dy = max(b - cy, 0, cy - d); return dx * dx + dy * dy
+    c = min(corr, key=dist)
+    if y1 <= c[1] + 4: return cx, y1
+    if y0 >= c[3] - 4: return cx, y0
+    if x1 <= c[0] + 4: return x1, cy
+    if x0 >= c[2] - 4: return x0, cy
+    return cx, cy
+
+
+vec, seed = {}, {}
 for f in ORDER:
-    d=F[f]; corr=d['corr']; nodes=[]; edges=[]; pts={i:[] for i in range(len(corr))}; nid=[0]
-    def nn(t,x,y,l=None,pre='n'):
-        nid[0]+=1; n={'id':f'{pre}{f}_{nid[0]}','t':t,'x':round(x),'y':round(y)}
-        if l: n['l']=l
-        nodes.append(n); return n
-    def attach(n,x,y):
-        ci=min(range(len(corr)),key=lambda i:dist(corr[i],x,y)); px,py=proj(corr[ci],x,y)
-        c=nn('c',px,py,pre='c'); pts[ci].append(c); edges.append([n['id'],c['id']])
-    rooms=[]
-    for (l,x0,x1,y0,y1,k,al) in d['rooms']:
-        rooms.append({'l':l,'x':x0,'y':y0,'w':x1-x0,'h':y1-y0,'k':k,**({'al':list(al)} if al else {})})
-        if k in ('room','place') and l:
-            labs=[l]+list(al) if k=='room' else list(al)+[l]
-            for i,lab in enumerate(labs):
-                fx=x0+(x1-x0)*(i+1)/(len(labs)+1) if len(labs)>1 else (x0+x1)/2
-                ci=min(range(len(corr)),key=lambda j:dist(corr[j],fx,(y0+y1)/2)); c=corr[ci]
-                if y1<=c[1]+4: dy=y1
-                elif y0>=c[3]-4: dy=y0
-                else: dy=(y0+y1)/2
-                if dy==(y0+y1)/2 and (c[2]-c[0])<(c[3]-c[1]):
-                    fx = x1 if x1<=c[0]+4 else x0 if x0>=c[2]-4 else fx
-                n=nn('r',fx,dy,lab,'r'); attach(n,fx,dy)
-    for (l,x,y) in d['st']: attach(nn('s',x,y,l,'s'),x,y)
-    pstarts=[]
-    for (A,B,w) in d.get('paths',[]):
-        a_=nn('c',*A,pre='c'); b_=nn('c',*B,pre='c'); edges.append([a_['id'],b_['id']])
-        ci=min(range(len(corr)),key=lambda i:dist(corr[i],*B)); px,py=proj(corr[ci],*B); c=nn('c',px,py,pre='c'); pts[ci].append(c); edges.append([b_['id'],c['id']])
-        pstarts.append(a_)
-    for (l,x,y) in d['ent']:
-        e=nn('e',x,y,l,'e'); near=[p for p in pstarts if ((p['x']-x)**2+(p['y']-y)**2)**.5<60]
-        if near: edges.append([e['id'],near[0]['id']])
-        else: attach(e,x,y)
-    # junctions between touching corridors
-    for i in range(len(corr)):
-        for j in range(i+1,len(corr)):
-            a,b=corr[i],corr[j]
-            if a[0]<=b[2]+6 and b[0]<=a[2]+6 and a[1]<=b[3]+6 and b[1]<=a[3]+6:
-                ix=(max(a[0],b[0])+min(a[2],b[2]))/2; iy=(max(a[1],b[1])+min(a[3],b[3]))/2
-                pa=proj(a,ix,iy); pb=proj(b,ix,iy)
-                na=nn('c',*pa,pre='c'); nb=nn('c',*pb,pre='c'); pts[i].append(na); pts[j].append(nb); edges.append([na['id'],nb['id']])
-    for i,c in enumerate(corr):
-        x0,y0,x1,y1=c; hor=(x1-x0)>=(y1-y0)
-        e1=nn('c',*proj(c,x0,y0),pre='c'); e2=nn('c',*proj(c,x1,y1),pre='c'); P=pts[i]+[e1,e2]
-        P.sort(key=lambda n:n['x'] if hor else n['y'])
-        for a,b in zip(P,P[1:]): edges.append([a['id'],b['id']])
-    vec[f]={'outline':' '.join(d['out']),'corr':[{'x':c[0],'y':c[1],'w':c[2]-c[0],'h':c[3]-c[1]} for c in corr],'rooms':rooms,
-            'deco':[{'x':a,'y':b,'w':c-a,'h':e-b} for a,b,c,e in d['deco']],'ent':[{'l':l,'x':x,'y':y} for l,x,y in d['ent']],'paths':[{'a':A,'b':B,'w':w} for A,B,w in d.get('paths',[])],'labels':[{'t':t,'x':x,'y':y} for t,x,y in d['lab']]}
-    seed[f]={'nodes':nodes,'edges':edges}
-    print(f,len(rooms),len(nodes))
-json.dump(vec,open('vec.json','w'),ensure_ascii=False,separators=(',',':'))
-json.dump(seed,open('seed.json','w'),ensure_ascii=False,separators=(',',':'))
+    d = F[f]
+    im = cv2.imread(os.path.join(HERE, 'scans', f'f{f}.jpg'), 0)
+    H, W = im.shape
+    region = poly_mask(im.shape, d)
+    walls = walls_of(im, region, d.get('erase', ()))
+    wallsC = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+
+    # building interior: everything the outer walls enclose (seal small gaps first)
+    sealed = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
+    ext = (1 - sealed).astype(np.uint8)
+    ff = np.zeros((H + 2, W + 2), np.uint8)
+    for sx, sy in ((1, 1), (W - 2, 1), (1, H - 2), (W - 2, H - 2)):
+        if ext[sy, sx] == 1:
+            cv2.floodFill(ext, ff, (sx, sy), 2)
+    inside = (((ext != 2) | (cv2.erode(region, np.ones((15, 15), np.uint8)) > 0)) & (walls == 0)).astype(np.uint8)
+    inside &= cv2.dilate(region, np.ones((41, 41), np.uint8))
+
+    # rooms: flood the real region around every labelled room, closing door gaps progressively
+    labelled = [r for r in d['rooms'] if r[0] and r[5] in ('room', 'place', 'wc', 'area')]
+    seeds = [((r[1] + r[2]) / 2, (r[3] + r[4]) / 2) for r in labelled]
+    room_masks = []
+    for idx, r in enumerate(labelled):
+        l, x0, x1, y0, y1, k, al = r
+        E = (x1 - x0) * (y1 - y0); sx, sy = seeds[idx]; got = None
+        for kk in (1, 5, 9, 13, 17, 23):
+            wk = walls if kk == 1 else cv2.morphologyEx(walls, cv2.MORPH_CLOSE, np.ones((kk, kk), np.uint8))
+            free = (inside & (wk == 0)).astype(np.uint8)
+            m = flood(free, sx, sy)
+            if m is None:
+                continue
+            A = int(m.sum())
+            others = sum(1 for j, s in enumerate(seeds) if j != idx and m[int(s[1]), int(s[0])] if 0 <= int(s[1]) < H and 0 <= int(s[0]) < W)
+            if A <= 2.3 * E and A >= 0.2 * E and others == 0:
+                got = cv2.dilate(m.astype(np.uint8), np.ones((kk // 2 * 2 + 1,) * 2, np.uint8)) & (walls == 0)
+                break
+            if A < 0.2 * E:
+                continue
+        if got is None:  # merged with neighbours or open plan: real space inside the box
+            box = np.zeros_like(walls); cv2.rectangle(box, (x0, y0), (x1, y1), 1, -1)
+            got = box & (walls == 0) & inside if (box & inside).sum() > 0.3 * E else box
+        room_masks.append(got.astype(np.uint8))
+
+    rooms_all = np.zeros_like(walls)
+    for m in room_masks:
+        rooms_all |= m
+
+    # halls: free space within the corridor zones
+    zone = np.zeros_like(walls)
+    for (x0, y0, x1, y1) in d['corr']:
+        cv2.rectangle(zone, (x0 - 14, y0 - 14), (x1 + 14, y1 + 14), 1, -1)
+    hall = (inside & (wallsC == 0) & (rooms_all == 0) & zone).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(hall, 4)
+    for i in range(1, n):
+        if st[i][4] < 400:
+            hall[lab == i] = 0
+
+    # ---- vector output ----
+    rooms_out = []
+    for r, m in zip(labelled, room_masks):
+        l, x0, x1, y0, y1, k, al = r
+        p = path_from_mask(cv2.dilate(m, np.ones((3, 3), np.uint8)), eps=1.5, min_area=20)
+        lx, ly, rad = label_spot(m)
+        ys, xs = np.nonzero(m)
+        bw, bh = (xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) if len(xs) else (x1 - x0, y1 - y0)
+        o = {'l': l, 'k': k, 'p': p, 'lx': lx, 'ly': ly, 'r': round(rad, 1), 'bw': int(bw), 'bh': int(bh)}
+        if al:
+            o['al'] = list(al)
+        rooms_out.append(o)
+    wy, wx = np.nonzero(walls)
+    vec[f] = {
+        'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
+        'walls': path_from_mask((cv2.GaussianBlur(walls * 255, (5, 5), 0) > 100).astype(np.uint8), eps=1.3, min_area=25),
+        'inside': path_from_mask(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=2.5, min_area=2000),
+        'hall': path_from_mask(cv2.dilate(hall, np.ones((3, 3), np.uint8)), eps=1.5, min_area=300),
+        'rooms': rooms_out,
+        'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
+        'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],
+        'paths': [{'a': A, 'b': B, 'w': w} for A, B, w in d.get('paths', [])],
+        'labels': [{'t': t, 'x': x, 'y': y} for t, x, y in d['lab']],
+    }
+
+    # ---- routing graph along the hall centre lines ----
+    pts, sk_edges = skeleton_graph(hall)
+    nodes, edges = [], []
+    for i, (x, y) in enumerate(pts):
+        nodes.append({'id': f'k{f}_{i}', 't': 'c', 'x': int(x), 'y': int(y)})
+    for a, b in sk_edges:
+        edges.append([f'k{f}_{a}', f'k{f}_{b}'])
+    P = np.array(pts, float) if pts else np.zeros((0, 2))
+    hy, hx = np.nonzero(hall)
+    HP = np.stack([hx, hy], 1).astype(float) if len(hx) else np.zeros((0, 2))
+    nid = [0]
+
+    def add(t, x, y, l=None, pre='n'):
+        nid[0] += 1
+        o = {'id': f'{pre}{f}_{nid[0]}', 't': t, 'x': int(round(x)), 'y': int(round(y))}
+        if l:
+            o['l'] = l
+        nodes.append(o); return o
+
+    def to_skel(n):
+        if not len(P):
+            return
+        dd = ((P[:, 0] - n['x']) ** 2 + (P[:, 1] - n['y']) ** 2)
+        j = int(np.argmin(dd)); edges.append([n['id'], f'k{f}_{j}'])
+
+    def hall_point_near(x, y, mask=None):
+        if not len(HP):
+            return x, y
+        cand = HP
+        if mask is not None:
+            ring = cv2.dilate(mask, np.ones((41, 41), np.uint8))
+            sel = ring[HP[:, 1].astype(int), HP[:, 0].astype(int)] > 0
+            if sel.any():
+                cand = HP[sel]
+        dd = (cand[:, 0] - x) ** 2 + (cand[:, 1] - y) ** 2
+        j = int(np.argmin(dd)); return cand[j]
+
+    for r, m in zip(labelled, room_masks):
+        l, x0, x1, y0, y1, k, al = r
+        if k not in ('room', 'place'):
+            continue
+        labs = [l] + list(al) if k == 'room' else list(al) + [l]
+        for i, lab in enumerate(labs):
+            tx, ty = rect_door(r, d['corr'])
+            if len(labs) > 1:
+                tx = x0 + (x1 - x0) * (i + 1) / (len(labs) + 1)
+            hx_, hy_ = hall_point_near(tx, ty, m)
+            to_skel(add('r', hx_, hy_, lab, 'r'))
+    for (l, x, y) in d['st']:
+        hx_, hy_ = hall_point_near(x, y)
+        n = add('s', hx_, hy_, l, 's'); to_skel(n)
+    pstarts = []
+    for (A, B, w) in d.get('paths', []):
+        a = add('c', *A, pre='c'); b = add('c', *B, pre='c'); edges.append([a['id'], b['id']]); to_skel(b); pstarts.append(a)
+    for (l, x, y) in d['ent']:
+        e = add('e', x, y, l, 'e')
+        near = [p for p in pstarts if ((p['x'] - x) ** 2 + (p['y'] - y) ** 2) ** .5 < 60]
+        if near:
+            edges.append([e['id'], near[0]['id']])
+        else:
+            hx_, hy_ = hall_point_near(x, y); c = add('c', hx_, hy_, pre='c'); edges.append([e['id'], c['id']]); to_skel(c)
+
+    # shortcuts: straight edges wherever two graph points see each other through the hall,
+    # so routes run straight down corridors instead of following skeleton wiggles
+    walk = cv2.dilate(hall, np.ones((5, 5), np.uint8))
+    for n in list(nodes):  # special nodes may sit just outside the hall (doors, halls, entrances)
+        cv2.circle(walk, (n['x'], n['y']), 10, 1, -1)
+    XY = np.array([[n['x'], n['y']] for n in nodes], float)
+    existing = {tuple(sorted(e)) for e in edges}
+    for i in range(len(nodes)):
+        dd = np.hypot(XY[:, 0] - XY[i, 0], XY[:, 1] - XY[i, 1])
+        for j in np.nonzero((dd > 1) & (dd < 320))[0]:
+            if j <= i:
+                continue
+            k = max(2, int(dd[j] / 4))
+            xs = np.linspace(XY[i, 0], XY[j, 0], k).round().astype(int); ys = np.linspace(XY[i, 1], XY[j, 1], k).round().astype(int)
+            if walk[ys, xs].all():
+                key2 = tuple(sorted((nodes[i]['id'], nodes[j]['id'])))
+                if key2 not in existing:
+                    existing.add(key2); edges.append(list(key2))
+
+    # prune edges that are (almost) straight continuations of two shorter kept edges
+    pos = {n['id']: (n['x'], n['y']) for n in nodes}
+    L = lambda a, b: ((pos[a][0] - pos[b][0]) ** 2 + (pos[a][1] - pos[b][1]) ** 2) ** .5
+    adj = {}
+    for a_, b_ in edges:
+        adj.setdefault(a_, set()).add(b_); adj.setdefault(b_, set()).add(a_)
+    for a_, b_ in sorted({tuple(sorted(e)) for e in edges}, key=lambda e: -L(*e)):
+        ln = L(a_, b_)
+        if any(L(a_, k) + L(k, b_) <= ln * 1.03 + 1 for k in adj[a_] & adj[b_]):
+            adj[a_].discard(b_); adj[b_].discard(a_)
+    edges = sorted({tuple(sorted((a_, b_))) for a_ in adj for b_ in adj[a_]})
+    edges = [list(e) for e in edges]
+    used = {x for e in edges for x in e}
+    nodes = [n for n in nodes if n['id'] in used or n['t'] != 'c']
+
+    # bridge disconnected skeleton pieces (doors drawn as walls, scan noise)
+    ids = {n['id']: i for i, n in enumerate(nodes)}
+    parent = list(range(len(nodes)))
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+    for a, b in edges:
+        parent[find(ids[a])] = find(ids[b])
+    while True:
+        groups = {}
+        for i in range(len(nodes)):
+            groups.setdefault(find(i), []).append(i)
+        if len(groups) <= 1:
+            break
+        main = max(groups.values(), key=len)
+        mainP = np.array([[nodes[i]['x'], nodes[i]['y']] for i in main], float)
+        best = None
+        for g in groups.values():
+            if g is main:
+                continue
+            for i in g:
+                dd = (mainP[:, 0] - nodes[i]['x']) ** 2 + (mainP[:, 1] - nodes[i]['y']) ** 2
+                j = int(np.argmin(dd))
+                if best is None or dd[j] < best[0]:
+                    best = (dd[j], i, main[j])
+        if best is None or best[0] > 400 ** 2:
+            break
+        edges.append([nodes[best[1]]['id'], nodes[best[2]]['id']]); parent[find(best[1])] = find(best[2])
+    seed[f] = {'nodes': nodes, 'edges': edges}
+    print(f, 'rooms', len(rooms_out), 'nodes', len(nodes), 'pieces', len({find(i) for i in range(len(nodes))}),
+          'kb', round(sum(len(json.dumps(v, ensure_ascii=False)) for v in vec[f].values()) / 1024))
+
+json.dump(vec, open(os.path.join(HERE, 'vec.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
+json.dump(seed, open(os.path.join(HERE, 'seed.json'), 'w'), ensure_ascii=False, separators=(',', ':'))

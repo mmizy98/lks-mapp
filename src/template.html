@@ -7,7 +7,7 @@
   --bg:#000; --surface:#0d0d0f; --card:#141417; --fg:#f2f4f8; --muted:#8f97a6; --line:#25272d;
   --brand:#0a52ad; --accent:#1e6fe0; --accent-hi:#3d8bff; --accent-fg:#fff; --soft:#0c2346; --warn:#ffb067;
   --route:#3d8bff; --start:#2fbf71; --end:#ff5a4e;
-  --map:#060708; --bld:#101319; --bld-line:#2a3140; --room:#0f1a2c; --room-line:#245ab8; --hall:#1c2433; --svc:#121620;
+  --map:#060708; --bld:#0e1117; --bld-line:#2a3140; --room:#13284a; --wall:#7d8fb3; --room-line:#245ab8; --hall:#1f2a3d; --svc:#121620;
   --sans:Montserrat,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:Montserrat,system-ui,sans-serif;
   --gx:max(16px,env(safe-area-inset-left,0px)); --gx2:max(16px,env(safe-area-inset-right,0px));
@@ -73,10 +73,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 #legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:12px;display:flex;align-items:center;gap:4px;background:rgba(13,13,15,.88);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:11px;font-weight:600;color:var(--muted)}
 #legend span{display:inline-block;width:12px;height:12px;border-radius:3px}
 #legend .lg-st{border:1.5px solid #ff9a3d;background:repeating-linear-gradient(#1f1812 0 2px,#ff9a3d 2px 3px)}
-#legend .lg-lf{border:1.5px solid #2bc4bd;background:linear-gradient(45deg,transparent 45%,#2bc4bd 45% 55%,transparent 55%),linear-gradient(-45deg,#0f2224 45%,#2bc4bd 45% 55%,#0f2224 55%)}
+#legend .lg-lf{border:1.5px solid #2bc4bd;background:#0f2224}
 #legend .lg-en{border:1.5px solid #2fbf71;border-radius:50%;background:#0d2a1a}
 #legend .lg-wc{border:1.5px solid #8b78ff;background:#211a36}
-#legend span:not(:first-child){margin-left:6px}
+#legend>span{margin-left:8px}
+#legend i{display:inline-flex;gap:2px}
 #loading{position:absolute;left:12px;top:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 10px;color:var(--muted);font-size:12px}
 #sheet{background:var(--surface);border-top:1px solid var(--line);max-height:30%;overflow:auto;padding-block:8px}
 #sheet h2{margin:0 0 6px;font-size:16px;font-weight:700;color:var(--accent-hi)}
@@ -132,7 +133,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   <main id="map" aria-label="План этажа">
     <div id="stage"><img id="plan" alt="План этажа" draggable="false"><svg id="vec"></svg><svg id="ov"></svg></div>
     <div id="loading">Загружаю план…</div>
-    <div id="legend" aria-hidden="true"><span class="lg-st"></span>лестница <span class="lg-lf"></span>лифт <span class="lg-wc"></span>туалет <span class="lg-en"></span>вход</div>
+    <div id="legend" aria-hidden="true"><i><span class="lg-st"></span><span class="lg-lf"></span><span class="lg-st"></span></i> лестницы и лифтовый холл <span class="lg-wc"></span> туалет <span class="lg-en"></span> вход</div>
     <div class="zoom">
       <button id="zIn" aria-label="Приблизить">+</button>
       <button id="zOut" aria-label="Отдалить">−</button>
@@ -334,7 +335,7 @@ function applyView(){stage.style.transform='translate('+view.tx+'px,'+view.ty+'p
 function vbox(f){
   var V=VEC[f]; if(!V) return null; var b={x0:1e9,y0:1e9,x1:-1e9,y1:-1e9};
   function add(x,y,w,hh){b.x0=Math.min(b.x0,x);b.y0=Math.min(b.y0,y);b.x1=Math.max(b.x1,x+w);b.y1=Math.max(b.y1,y+hh)}
-  V.rooms.forEach(function(r){add(r.x,r.y,r.w,r.h)}); (V.deco||[]).forEach(function(r){add(r.x,r.y,r.w,r.h)}); (V.corr||[]).forEach(function(r){add(r.x,r.y,r.w,r.h)}); (V.ent||[]).forEach(function(e){add(e.x-20,e.y-20,40,60)});
+  if(V.bb) add(V.bb[0],V.bb[1],V.bb[2]-V.bb[0],V.bb[3]-V.bb[1]); (V.deco||[]).forEach(function(r){add(r.x,r.y,r.w,r.h)}); (V.ent||[]).forEach(function(e){add(e.x-20,e.y-20,40,60)});
   return b;
 }
 function fitAll(){
@@ -391,47 +392,41 @@ window.addEventListener('resize',function(){ if(ready) fitAll() });
 
 /* ---------- drawing ---------- */
 var COL={r:'#3d8bff',c:'#8f97a6',s:'#ff9a3d',l:'#2bc4bd',e:'#2fbf71'};
+var hitCtx=null;
+function inShape(r,ip){
+  try{ if(!hitCtx) hitCtx=document.createElement('canvas').getContext('2d'); if(!r._p) r._p=new Path2D(r.p); return hitCtx.isPointInPath(r._p,ip.x,ip.y,'evenodd') }catch(e){ return false }
+}
 function renderVec(){
   var V=VEC[cur], tgt=R&&R.end&&R.end.f===cur&&R.end.n.t==='r'?R.end.n.l:'', src=R&&R.start&&R.start.f===cur&&R.start.n.t==='r'?R.start.n.l:'';
   var key=cur+'|'+tgt+'|'+src+'|'+(V?1:0); if(key===vecKey) return; vecKey=key;
   if(!V){vsvg.innerHTML=''; return}
-  var h='<path d="'+V.outline+'" fill="var(--bld)" stroke="var(--bld-line)" stroke-width="4" stroke-linejoin="round"/>';
-  (V.corr||[]).forEach(function(c){h+='<rect x="'+c.x+'" y="'+c.y+'" width="'+c.w+'" height="'+c.h+'" fill="var(--hall)"/>'});
+  var O='#ff9a3d', T='#2bc4bd', h='';
+  h+='<path d="'+V.inside+'" fill="var(--bld)" fill-rule="evenodd"/>';
+  h+='<path d="'+V.hall+'" fill="var(--hall)" fill-rule="evenodd"/>';
   (V.paths||[]).forEach(function(p){
     var dx=p.b[0]-p.a[0],dy=p.b[1]-p.a[1],L=Math.hypot(dx,dy)||1,nx=-dy/L*p.w/2,ny=dx/L*p.w/2, ex=dx/L*12, ey=dy/L*12;
     var A=[p.a[0]-ex,p.a[1]-ey],B=[p.b[0]+ex,p.b[1]+ey];
-    h+='<polygon points="'+[[A[0]+nx,A[1]+ny],[B[0]+nx,B[1]+ny],[B[0]-nx,B[1]-ny],[A[0]-nx,A[1]-ny]].map(function(q){return q[0].toFixed(1)+','+q[1].toFixed(1)}).join(' ')+'" fill="var(--hall)" stroke="var(--bld-line)" stroke-width="2.5"/>';
+    h+='<polygon points="'+[[A[0]+nx,A[1]+ny],[B[0]+nx,B[1]+ny],[B[0]-nx,B[1]-ny],[A[0]-nx,A[1]-ny]].map(function(q){return q[0].toFixed(1)+','+q[1].toFixed(1)}).join(' ')+'" fill="var(--hall)"/>';
   });
-  (V.labels||[]).forEach(function(l){h+='<text x="'+l.x+'" y="'+l.y+'" font-family="Montserrat,sans-serif" font-weight="600" font-size="30" fill="#3a4252" text-anchor="middle" letter-spacing="4">'+esc(l.t.toUpperCase())+'</text>'});
   var halls=G[cur].nodes.filter(function(n){return n.t==='s'||n.t==='l'});
-  var O='#ff9a3d', T='#2bc4bd';
-  function hatch(x,y,w,hh,c){var s='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+hh+'" rx="3" fill="#1f1812" stroke="'+c+'" stroke-width="2"/>'; for(var yy=y+7;yy<y+hh-3;yy+=8) s+='<line x1="'+(x+4)+'" x2="'+(x+w-4)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+c+'" stroke-width="1.6" opacity=".8"/>'; return s}
-  (V.deco||[]).forEach(function(c){
-    var cx=c.x+c.w/2, main=halls.some(function(n){return Math.abs(n.x-cx)<110});
-    h+='<rect x="'+c.x+'" y="'+c.y+'" width="'+c.w+'" height="'+c.h+'" rx="4" fill="#12151c" stroke="var(--bld-line)" stroke-width="2"/>';
-    if(!main){ h+=hatch(c.x+6,c.y+6,c.w-12,c.h-12,O); return }
-    var stH=Math.min(70,c.h*0.38), lh=c.h-stH-12, s=Math.min(c.w-14,30), n=Math.max(1,Math.floor((lh-4)/(s+4))), lx=cx-s/2;
-    for(var i=0;i<n;i++){var yy=c.y+6+i*(s+4);
-      h+='<rect x="'+lx+'" y="'+yy+'" width="'+s+'" height="'+s+'" rx="2" fill="#0f2224" stroke="'+T+'" stroke-width="1.8"/><path d="M'+(lx+4)+' '+(yy+4)+'L'+(lx+s-4)+' '+(yy+s-4)+'M'+(lx+s-4)+' '+(yy+4)+'L'+(lx+4)+' '+(yy+s-4)+'" stroke="'+T+'" stroke-width="1.5"/>'}
-    h+=hatch(c.x+5,c.y+c.h-stH-5,c.w-10,stH,O);
-  });
-  h+='<g class="rm">';
+  var lab='';
   V.rooms.forEach(function(r){
-    var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), grey=r.k!=='room';
-    var wc=r.k==='wc', fill=isT?'var(--accent)':isS?'#14532f':wc?'#211a36':grey?'var(--svc)':'var(--room)', st=isT?'var(--accent-hi)':isS?'var(--start)':wc?'#8b78ff':grey?'var(--bld-line)':'var(--room-line)';
-    h+='<rect x="'+(r.x+2)+'" y="'+(r.y+2)+'" width="'+(r.w-4)+'" height="'+(r.h-4)+'" rx="5" fill="'+fill+'" stroke="'+st+'" stroke-width="2"/>';
+    var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), wc=r.k==='wc', grey=r.k==='area'||r.k==='place';
+    var fill=isT?'var(--accent)':isS?'#14532f':wc?'#211a36':grey?'var(--svc)':'var(--room)';
+    h+='<path d="'+r.p+'" fill="'+fill+'" fill-rule="evenodd"/>';
     if(!r.l) return;
-    var named=r.k==='area'||r.k==='place', n=String(r.l).length, cx=r.x+r.w/2, cy=r.y+r.h/2;
-    var vert=r.h>r.w*1.5&&r.w<70, len=vert?r.h:r.w, thick=vert?r.w:r.h;
-    var fs=Math.min(named?17:21,(len-10)/(n*(named?0.6:0.64)),thick*0.62);
-    if(fs<8) return;
-    var col=isT||isS?'#fff':r.k==='wc'?'#c4b8ff':named?(r.k==='place'?'#aab4c6':'#5d6678'):'';
-    h+='<text x="'+cx+'" y="'+cy+'" font-size="'+fs.toFixed(1)+'"'+(named?' font-weight="600"':'')+(col?' fill="'+col+'"':'')+(vert?' transform="rotate(-90 '+cx+' '+cy+')"':'')+'>'+esc(r.l)+'</text>';
+    var named=grey, n=String(r.l).length, vert=r.bh>r.bw*1.6&&r.bw<70, len=(vert?r.bh:r.bw)*0.86;
+    var fs=Math.min(named?16:20,len/(n*(named?0.62:0.68)),r.r*1.8);
+    if(fs<7) return;
+    var col=isT||isS?'#fff':wc?'#c4b8ff':named?(r.k==='place'?'#aab4c6':'#5d6678'):'#e9eefc';
+    lab+='<text x="'+r.lx+'" y="'+r.ly+'" font-size="'+fs.toFixed(1)+'"'+(named?' font-weight="600"':'')+' fill="'+col+'"'+(vert?' transform="rotate(-90 '+r.lx+' '+r.ly+')"':'')+'>'+esc(r.l)+'</text>';
   });
-  h+='</g>';
+  h+='<path d="'+V.walls+'" fill="var(--wall)" fill-rule="evenodd"/>';
+  (V.labels||[]).forEach(function(l){h+='<text x="'+l.x+'" y="'+l.y+'" font-family="Montserrat,sans-serif" font-weight="600" font-size="30" fill="#3a4252" text-anchor="middle" letter-spacing="4">'+esc(l.t.toUpperCase())+'</text>'});
+  h+='<g class="rm">'+lab+'</g>';
   // stairs | lift hall | stairs  — the "*|*" sign
   halls.forEach(function(n){
-    var s=22,g=3,x=n.x-s*1.5-g,y=n.y-s/2, O='#ff9a3d', T='#2bc4bd';
+    var s=16,g=2,x=n.x-s*1.5-g,y=n.y-s/2;
     h+='<rect x="'+(x-5)+'" y="'+(y-5)+'" width="'+(s*3+g*2+10)+'" height="'+(s+10)+'" rx="8" fill="#0b0d12" stroke="#2a3140" stroke-width="1.5"/>';
     [0,2].forEach(function(i){var xx=x+i*(s+g);
       h+='<rect x="'+xx+'" y="'+y+'" width="'+s+'" height="'+s+'" rx="4" fill="#1f1812" stroke="'+O+'" stroke-width="2"/>';
@@ -439,7 +434,7 @@ function renderVec(){
     });
     var mx=x+s+g+s/2, my=n.y;
     h+='<rect x="'+(x+s+g)+'" y="'+y+'" width="'+s+'" height="'+s+'" rx="4" fill="#0f2224" stroke="'+T+'" stroke-width="2"/>';
-    h+='<path d="M'+(mx-5)+' '+(my-2)+' l5 -6 l5 6 M'+(mx-5)+' '+(my+2)+' l5 6 l5 -6" fill="none" stroke="'+T+'" stroke-width="2"/>';
+    h+='<path d="M'+(mx-4)+' '+(my-1.5)+' l4 -4.5 l4 4.5 M'+(mx-4)+' '+(my+1.5)+' l4 4.5 l4 -4.5" fill="none" stroke="'+T+'" stroke-width="1.8"/>';
   });
   (V.ent||[]).forEach(function(e){
     var G2='#2fbf71';
@@ -572,7 +567,7 @@ $('#lbl').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDe
 function onTap(ip,g){
   if(mode!=='edit'){
     var V=VEC[cur]; if(!V) return;
-    var r=V.rooms.filter(function(r){return (r.k==='room'||r.k==='place')&&r.l&&ip.x>=r.x&&ip.x<=r.x+r.w&&ip.y>=r.y&&ip.y<=r.y+r.h})[0]; if(!r) return;
+    var r=V.rooms.filter(function(r){return (r.k==='room'||r.k==='place')&&r.l&&inShape(r,ip)})[0]; if(!r) return;
     var it=items().filter(function(i){return i.f===cur&&i.n.t==='r'&&i.n.l===r.l})[0]||items().filter(function(i){return i.f===cur&&i.n.t==='r'&&(r.al||[]).indexOf(i.n.l)>=0})[0]; if(it) pick('to',it); return;
   }
   var g2=G[cur], hn=hitNode(ip);
