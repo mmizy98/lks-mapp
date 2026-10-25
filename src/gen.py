@@ -11,6 +11,7 @@ Outputs vec.json and seed.json next to this file.
 import json, os, cv2, numpy as np
 from skimage.morphology import skeletonize
 from floors import F
+from wallvec import straight_walls, straight_poly_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ORDER = ['1a', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
@@ -240,7 +241,7 @@ for f in ORDER:
     rooms_out = []
     for r, m in zip(labelled, room_masks):
         l, x0, x1, y0, y1, k, al = r
-        p = path_from_mask(cv2.dilate(m, np.ones((3, 3), np.uint8)), eps=1.5, min_area=20)
+        p = straight_poly_path(cv2.dilate(m, np.ones((3, 3), np.uint8)) & (inside | walls), eps=3.0, min_area=20)
         lx, ly, rad = label_spot(m)
         ys, xs = np.nonzero(m)
         bw, bh = (xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) if len(xs) else (x1 - x0, y1 - y0)
@@ -248,12 +249,44 @@ for f in ORDER:
         if al:
             o['al'] = list(al)
         rooms_out.append(o)
+    # stair / lift cores: keep their real outline, replace the scanned hatching with clean symbols
+    halls_x = [x for _, x, _ in d['st']]
+    vwalls = walls.copy(); cores = []
+    for (x0, y0, x1, y1) in d['deco']:
+        X0, Y0, X1, Y1 = max(x0 - 6, 0), max(y0 - 6, 0), min(x1 + 6, W), min(y1 + 6, H)
+        ys_, xs_ = np.nonzero(walls[Y0:Y1, X0:X1])
+        if len(xs_) < 30:
+            continue
+        hull = cv2.convexHull(np.stack([xs_ + X0, ys_ + Y0], 1).astype(np.int32)).reshape(-1, 2)
+        hm = np.zeros_like(walls); cv2.fillPoly(hm, [hull], 1)
+        inner = cv2.erode(hm, np.ones((15, 15), np.uint8))
+        vwalls[inner > 0] = 0
+        main = any(abs(hx - (x0 + x1) / 2) < 110 for hx in halls_x)
+        top, bot = int(hull[:, 1].min()), int(hull[:, 1].max())
+        split = int(top + (bot - top) * 0.62) if main else top
+        boxes = []
+        if main:
+            y = top + 10
+            while True:
+                row = np.nonzero(inner[y])[0] if y < H else []
+                if len(row) < 12:
+                    y += 4
+                    if y > split - 12:
+                        break
+                    continue
+                cx = (row[0] + row[-1]) / 2; s = min(row[-1] - row[0] - 4, 30)
+                if y + s > split:
+                    break
+                boxes.append([round(float(cx - s / 2), 1), int(y), int(s)]); y += s + 5
+        cores.append({'pts': hull.tolist(), 'split': split, 'main': bool(main), 'boxes': boxes,
+                      'bb': [int(hull[:, 0].min()), top, int(hull[:, 0].max()), bot]})
     wy, wx = np.nonzero(walls)
     vec[f] = {
         'bb': [int(wx.min()), int(wy.min()), int(wx.max()), int(wy.max())],
-        'walls': path_from_mask((cv2.GaussianBlur(walls * 255, (5, 5), 0) > 100).astype(np.uint8), eps=1.3, min_area=25),
-        'inside': path_from_mask(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=2.5, min_area=2000),
-        'hall': path_from_mask(cv2.dilate(hall, np.ones((3, 3), np.uint8)), eps=1.5, min_area=300),
+        'wl': straight_walls(vwalls),
+        'cores': cores,
+        'inside': straight_poly_path(cv2.morphologyEx(inside | walls, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) & cv2.dilate(region, np.ones((41, 41), np.uint8)), eps=3.5, min_area=2000),
+        'hall': straight_poly_path(cv2.dilate(hall, np.ones((5, 5), np.uint8)), eps=3.0, min_area=300),
         'rooms': rooms_out,
         'deco': [{'x': a, 'y': b, 'w': c - a, 'h': e - b} for a, b, c, e in d['deco']],
         'ent': [{'l': l, 'x': x, 'y': y} for l, x, y in d['ent']],

@@ -409,6 +409,18 @@ function renderVec(){
     h+='<polygon points="'+[[A[0]+nx,A[1]+ny],[B[0]+nx,B[1]+ny],[B[0]-nx,B[1]-ny],[A[0]-nx,A[1]-ny]].map(function(q){return q[0].toFixed(1)+','+q[1].toFixed(1)}).join(' ')+'" fill="var(--hall)"/>';
   });
   var halls=G[cur].nodes.filter(function(n){return n.t==='s'||n.t==='l'});
+  (V.cores||[]).forEach(function(c,i){
+    var id='core'+cur.replace(/\W/g,'')+'_'+i, pts=c.pts.map(function(q){return q[0]+','+q[1]}).join(' '), b=c.bb, s='';
+    s+='<clipPath id="'+id+'"><polygon points="'+pts+'"/></clipPath><g clip-path="url(#'+id+')">';
+    if(c.main) s+='<rect x="'+b[0]+'" y="'+b[1]+'" width="'+(b[2]-b[0])+'" height="'+(c.split-b[1])+'" fill="#0f2224"/>';
+    s+='<rect x="'+b[0]+'" y="'+c.split+'" width="'+(b[2]-b[0])+'" height="'+(b[3]-c.split)+'" fill="#1f1812"/>';
+    for(var y=c.split+6;y<b[3];y+=7) s+='<line x1="'+b[0]+'" x2="'+b[2]+'" y1="'+y+'" y2="'+y+'" stroke="'+O+'" stroke-width="1.6" opacity=".75"/>';
+    s+='</g>';
+    (c.boxes||[]).forEach(function(q){var x=q[0],y=q[1],w=q[2];
+      s+='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+w+'" rx="2" fill="none" stroke="'+T+'" stroke-width="2"/><path d="M'+(x+4)+' '+(y+4)+'L'+(x+w-4)+' '+(y+w-4)+'M'+(x+w-4)+' '+(y+4)+'L'+(x+4)+' '+(y+w-4)+'" stroke="'+T+'" stroke-width="1.6"/>';
+    });
+    h+=s;
+  });
   var lab='';
   V.rooms.forEach(function(r){
     var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), wc=r.k==='wc', grey=r.k==='area'||r.k==='place';
@@ -421,7 +433,7 @@ function renderVec(){
     var col=isT||isS?'#fff':wc?'#c4b8ff':named?(r.k==='place'?'#aab4c6':'#5d6678'):'#e9eefc';
     lab+='<text x="'+r.lx+'" y="'+r.ly+'" font-size="'+fs.toFixed(1)+'"'+(named?' font-weight="600"':'')+' fill="'+col+'"'+(vert?' transform="rotate(-90 '+r.lx+' '+r.ly+')"':'')+'>'+esc(r.l)+'</text>';
   });
-  h+='<path d="'+V.walls+'" fill="var(--wall)" fill-rule="evenodd"/>';
+  (V.wl||[]).forEach(function(g){h+='<path d="'+g[1]+'" fill="none" stroke="var(--wall)" stroke-width="'+g[0]+'" stroke-linecap="round" stroke-linejoin="round"/>'});
   (V.labels||[]).forEach(function(l){h+='<text x="'+l.x+'" y="'+l.y+'" font-family="Montserrat,sans-serif" font-weight="600" font-size="30" fill="#3a4252" text-anchor="middle" letter-spacing="4">'+esc(l.t.toUpperCase())+'</text>'});
   h+='<g class="rm">'+lab+'</g>';
   // stairs | lift hall | stairs  — the "*|*" sign
@@ -626,6 +638,7 @@ initData();
   $('#viewNote').className='note'+($('#viewNote').textContent.indexOf('Схема')===0?'':' warn');
 })();
 loadDb();
+window.ULK_VIEW=function(x,y,s){var r=map.getBoundingClientRect(); view.s=s; view.tx=r.width/2-x*s; view.ty=r.height/2-y*s; applyView()};
 window.ULK_OPEN=function(to,from){
   function one(q){q=String(q).replace(/_/g,'-'); var r=find(q); return r.length?r[0]:null}
   var T=one(to); if(!T) return; var Fm=from?one(from):null;
