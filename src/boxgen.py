@@ -105,20 +105,39 @@ PASS = (232, 290)
 ZLOW = (126, 226)  # lower slot inside a zone block
 
 
-BAND = {'4': (300, 2075)}   # floors whose band is shorter than the typical one
+BAND = {}   # floors whose band is shorter than the typical one
 NO_ENDS = {'4'}               # no U-detours at the ends
 SQUEEZE = {'4'}               # upper-row rooms run under the cores on the scan: push them out of the core zones
 # extra non-walkable areas drawn around the band (scan x, canonical y), straight lines only
-AREAS = {'4': [
-    ('Атриум', [(722, 300), (2075, 300), (1703, 470), (722, 470)], (1240, 390)),
-    ('Зрительный зал', [(250, 300), (705, 300), (705, 380), (600, 470), (430, 560), (260, 600)], (450, 420)),
-]}
+AREAS = {}
+
+
+XMAP = {'4': [(371, 341), (780, 854), (1720, 1908), (2075, 2414)]}  # stretch floor 4 so cores line up with 5–11
+
+
+def _xm(f, x):
+    pts = XMAP[f]
+    if x <= pts[0][0]:
+        return pts[0][1] + (x - pts[0][0])
+    for (a, xa), (b, xb) in zip(pts, pts[1:]):
+        if x <= b:
+            return xa + (x - a) * (xb - xa) / (b - a)
+    return pts[-1][1] + (x - pts[-1][0])
+
+
+def _stretched(f):
+    d = dict(F[f]); m = lambda x: round(_xm(f, x))
+    d['rooms'] = [(l, m(x0), m(x1), y0, y1, k, al) for (l, x0, x1, y0, y1, k, al) in d['rooms']]
+    d['deco'] = [(m(a), b, m(c), e) for (a, b, c, e) in d['deco']]
+    d['corr'] = [(m(a), b, m(c), e) for (a, b, c, e) in d['corr']]
+    d['st'] = [(l, m(x), y) for (l, x, y) in d['st']]
+    return d
 
 
 def build(f):
     if f in YMAP:
         return build_mapped(f)
-    d = F[f]
+    d = _stretched(f) if f in XMAP else F[f]
     X0, X1 = BAND.get(f, (globals()['X0'], globals()['X1']))
     halls = [(l, x) for (l, x, _) in d['st']]
     core_zones = [(hx - CORE_W - CORE_GAP / 2 - 6, hx + CORE_W + CORE_GAP / 2 + 6) for _, hx in halls]
@@ -278,17 +297,28 @@ if __name__ == '__main__':
 # x is kept from the scan; y is squeezed piecewise so rows get tidy, equal heights.
 YMAP = {'3': [(125, 0), (310, 170), (408, 226), (660, 420), (960, 600)],
         '2': [(130, 0), (305, 160), (410, 220), (660, 420), (960, 600)]}
+R_ = lambda l, x0, x1, y0, y1, k='room', al=(): (l, x0, x1, y0, y1, k, tuple(al))
+CLEAN_ROOMS = {'3': [  # floor 3 tidied: equal-height upper row, everything inside the outline
+    R_('302', 305, 440, 125, 308), R_('310', 545, 705, 125, 308, al=['310а', '308']),
+    R_('312', 905, 1065, 125, 308, al=['312а']), R_('316', 1090, 1250, 125, 308, al=['316а']), R_('318', 1290, 1450, 125, 308, al=['318а']),
+    R_('320', 1475, 1635, 125, 308, al=['320а']), R_('322', 1830, 1990, 125, 308, al=['322а']),
+    R_('324', 2080, 2240, 125, 308, al=['324а', '317']), R_('326', 2265, 2425, 125, 308, al=['328', '317а']), R_('330', 2445, 2505, 125, 308),
+    R_('301', 305, 420, 408, 480), R_(None, 420, 640, 408, 480, 'svc'), R_('М', 640, 705, 408, 444, 'wc'), R_('Ж', 640, 705, 444, 480, 'wc'), R_('303', 705, 767, 408, 480),
+    R_(None, 1092, 1192, 425, 592, 'svc'), R_('Читальный зал', 1192, 1508, 425, 592, 'place', ['305']),
+    R_('311', 1508, 1642, 425, 500), R_('307', 1508, 1575, 500, 592), R_('313', 1575, 1642, 500, 592)]}
+CLEAN_CORR = {'3': [(305, 310, 2505, 408)]}
 OUTLINES = {
-    '3': [(300, 125), (2492, 125), (2550, 417), (2133, 417), (1750, 650), (767, 650), (650, 800), (392, 933), (300, 933)],
+    '3': [(300, 125), (2510, 125), (2510, 417), (2133, 417), (1750, 650), (300, 650)],
     '2': [(260, 130), (2492, 130), (2550, 425), (2025, 425), (1733, 658), (683, 658), (600, 800), (342, 958), (260, 958)],
 }
+EXTRA_STAIRS = {'2': [(402, 200, 480, 300)]}  # left end stair missing from the scan data
 EXTRA_CORR = {  # inner passages to rooms that do not open onto the main corridor (scan coords)
     '3': [(1642, 400, 1678, 592)],
     '2': [(850, 400, 867, 608), (850, 583, 1167, 608), (1583, 400, 1605, 575)],
 }
 MAP_AREAS = {
     '3': [('Атриум', [(767, 408), (2133, 408), (1750, 650), (767, 650)], (950, 600)),
-          ('Зрительный зал', [(292, 483), (767, 483), (767, 650), (650, 800), (392, 933), (300, 933)], (520, 700))],
+          ('Зрительный зал', [(300, 480), (767, 480), (767, 650), (300, 650)], (535, 580))],
     '2': [('Зрительный зал', [(258, 467), (683, 467), (683, 658), (600, 800), (342, 958), (270, 958)], (470, 700))],
 }
 
@@ -325,7 +355,7 @@ def build_mapped(f):
     d = F[f]; ym = lambda y: _ym(f, y)
     halls = [(l, x) for (l, x, _) in d['st']]
     rooms, stubs = [], []
-    for (l, x0, x1, y0, y1, k, al) in d['rooms']:
+    for (l, x0, x1, y0, y1, k, al) in CLEAN_ROOMS.get(f, d['rooms']):
         b = {'x': x0 + GAP / 2, 'y': round(ym(y0) + GAP / 2, 1), 'w': x1 - x0 - GAP, 'h': round(ym(y1) - ym(y0) - GAP, 1)}
         if not l or k == 'svc':
             stubs.append(b); continue
@@ -353,11 +383,11 @@ def build_mapped(f):
     for b in rooms:
         if b['w'] < 40:
             b['x'] -= (40 - b['w']) / 2; b['w'] = 40
-    corr = [(x0, min(round(ym(y0)), round(ym(y1)) - 26), x1, round(ym(y1))) for (x0, y0, x1, y1) in d['corr']]
+    corr = [(x0, min(round(ym(y0)), round(ym(y1)) - 26), x1, round(ym(y1))) for (x0, y0, x1, y1) in CLEAN_CORR.get(f, d['corr'])]
     corr += [(x0, round(ym(y0)), x1, round(ym(y1))) for (x0, y0, x1, y1) in EXTRA_CORR.get(f, [])]
     top = ym(min(r[3] for r in d['rooms']))
     cores = []
-    for (cx0, cy0, cx1, cy1) in d['deco']:
+    for (cx0, cy0, cx1, cy1) in d['deco'] + EXTRA_STAIRS.get(f, []):
         mid = (cx0 + cx1) / 2
         if 1150 < mid < 1550:
             continue  # central stair removed, as on the upper floors
@@ -365,7 +395,9 @@ def build_mapped(f):
         if main:
             cores.append({'x': cx0, 'y': CORE_TOP + 50, 'w': cx1 - cx0, 'h': round(ym(cy1)) - CORE_TOP - 50, 'main': True})
         else:
-            cores.append({'x': cx0, 'y': round(ym(cy0)), 'w': cx1 - cx0, 'h': round(ym(cy1) - ym(cy0)), 'main': False, 'lifts': []})
+            # end stair as on the upper floors: a small block above the band, stair on top, two small lifts under it
+            w = SMALL_W; x = mid - w / 2; y = -98
+            cores.append({'x': x, 'y': y, 'w': w, 'h': -y + 4, 'main': False, 'sh': 40, 'lifts': [[mid - 31, y + 54, 28], [mid + 3, y + 54, 28]]})
     hy = (corr[0][1] + corr[0][3]) / 2
     return {'rooms': rooms, 'stubs': stubs, 'cores': cores, 'halls': halls, 'corr': corr, 'hall_y': hy,
             'band': (min(x for x, _ in _outline(f)), max(x for x, _ in _outline(f))), 'outline': _outline(f),

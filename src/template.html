@@ -407,7 +407,7 @@ function renderBox(V,tgt,src){
   if(!V.outline||!V.outline.length) (V.areas||[]).forEach(function(a){h+='<polygon points="'+a.pts.map(function(q){return q.join(',')}).join(' ')+'" fill="#0b0e14" stroke="'+L+'" stroke-width="4" stroke-linejoin="round"/>'});
   var ol=V.outline&&V.outline.length?'<polygon points="'+V.outline.map(function(q){return q.join(',')}).join(' ')+'" fill="'+B+'" stroke-linejoin="round"':'';
   if(ol) h+=ol+' stroke="'+L+'" stroke-width="4"/>'; else h+=R(b[0],b[1],b[2]-b[0],b[3]-b[1],10,B,L,4);
-  V.cores.forEach(function(c){ if(c.main||!ol) h+=R(c.x,c.y,c.w,c.h+8,8,B,L,4)});
+  V.cores.forEach(function(c){ h+=R(c.x,c.y,c.w,c.h+8,8,B,L,4)});
   if(ol) h+=ol+'/>'; else h+=R(b[0]+2,b[1]+2,b[2]-b[0]-4,b[3]-b[1]-4,9,B);
   V.cores.forEach(function(c){h+=R(c.x+3,c.y+3,c.w-6,c.h-3,6,B)});
   if(V.outline&&V.outline.length) (V.areas||[]).forEach(function(a){h+='<polygon points="'+a.pts.map(function(q){return q.join(',')}).join(' ')+'" fill="#0b0e14" stroke="#2a3140" stroke-width="2" stroke-linejoin="round"/>'});
@@ -420,8 +420,8 @@ function renderBox(V,tgt,src){
       var sy=y+hh-st; s+=R(x+8,sy,w-16,y+hh-sy-8,4,'#1f1812',O,2);
       for(var yy=sy+8;yy<y+hh-12;yy+=9) s+='<line x1="'+(x+12)+'" x2="'+(x+w-12)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+O+'" stroke-width="2"/>';
     } else {
-      s+=R(x+8,y+8,w-16,hh-14,4,'#1f1812',O,2);
-      for(var xx=x+15;xx<x+w-12;xx+=9) s+='<line x1="'+xx+'" x2="'+xx+'" y1="'+(y+12)+'" y2="'+(y+hh-10)+'" stroke="'+O+'" stroke-width="2"/>';
+      var shh=c.sh||hh-14; s+=R(x+8,y+8,w-16,shh,4,'#1f1812',O,2);
+      for(var xx=x+15;xx<x+w-12;xx+=9) s+='<line x1="'+xx+'" x2="'+xx+'" y1="'+(y+12)+'" y2="'+(y+4+shh)+'" stroke="'+O+'" stroke-width="2"/>';
       (c.lifts||[]).forEach(function(q){s+=lift(q[0],q[1],q[2],T)});
     }
     h+=s;
