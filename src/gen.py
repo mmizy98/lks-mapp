@@ -13,7 +13,7 @@ import json, os, cv2, numpy as np
 from skimage.morphology import skeletonize
 from floors import F
 from boxgen import build as build_box, CO as BCO, UP as BUP, LO as BLO, X0 as BX0, X1 as BX1, CORE_TOP as BCORE_TOP
-BOXF = {'2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}
+BOXF = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}
 from wallvec import straight_walls, straight_poly_path, clean_walls, room_shape, snap_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -183,7 +183,7 @@ def rect_door(r, corr):
 
 
 
-def box_graph(f, corr, labelled, halls):
+def box_graph(f, corr, labelled, halls, ents=()):
     """Routing graph for schematic floors: straight runs along corridor centre lines,
     a perpendicular stub from the corridor to each room's door on its edge."""
     nodes, edges, pos = [], [], {}
@@ -250,6 +250,9 @@ def box_graph(f, corr, labelled, halls):
         foot = put(li, dx_ if hz else dy_)
         for lab in ([l] + list(al) if k != 'place' else list(al) + [l]):
             edges.append([node('r', dx_, dy_, lab), foot])
+    for (l, ex, ey, tx, ty) in ents:  # entrance → straight (possibly diagonal) link onto the corridor
+        li = nearest(tx, ty); hz = lines[li][1]
+        edges.append([node('e', ex, ey, l), put(li, tx if hz else ty)])
     for (l, hx, hy) in halls:
         li = nearest(hx, hy); hz = lines[li][1]
         edges.append([node('s', hx, lines[li][2], l), put(li, hx if hz else hy)])
@@ -297,8 +300,10 @@ for f in ORDER:
                   'corr': [[a0, sh(b0), a1 - a0, b1 - b0] for a0, b0, a1, b1 in B['corr']],
                   'stubs': [[s['x'], sh(s['y']), s['w'], s['h']] for s in B['stubs']],
                   'cores': [dict(c, y=sh(c['y']), lifts=[[lx, sh(ly), lw] for lx, ly, lw in c.get('lifts', [])]) for c in B['cores']],
-                  'rooms': rooms_out, 'labels': [], 'ent': [], 'paths': []}
-        seed[f] = box_graph(f, d['corr'], labelled, d['st'])
+                  'rooms': rooms_out, 'labels': [{'t': l, 'x': x, 'y': sh(y)} for l, x, y in B.get('labels', [])],
+                  'ent': [{'l': l, 'x': x, 'y': sh(y)} for l, x, y, _, _ in B.get('ents', [])],
+                  'paths': [{'a': [a[0], sh(a[1])], 'b': [b[0], sh(b[1])], 'w': w} for a, b, w in B.get('walks', [])]}
+        seed[f] = box_graph(f, d['corr'], labelled, d['st'], [(l, x, sh(y), tx, sh(ty)) for l, x, y, tx, ty in B.get('ents', [])])
         print(f, 'box rooms', len(rooms_out), 'nodes', len(seed[f]['nodes']))
         continue
     else:
