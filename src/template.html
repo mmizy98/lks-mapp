@@ -166,7 +166,7 @@ var selNode=null, activeCorr=null, linkA=null;
 var dbRef=null, dirty={}, saveTimer=null;
 var LS='ulk-map-v3';
 var NOSCAN=!!window.ULK_NOSCAN, ready=false;
-var DIM={'1a':1533,'1':1144,'2':1145,'3':1140,'4':1046,'5':520,'6':520,'7':520,'8':520,'9':520,'10':520,'11':520};
+var DIM={'1a':1533,'1':1144,'2':900,'3':900,'4':900,'5':520,'6':520,'7':520,'8':520,'9':520,'10':520,'11':520};
 
 function clone(o){return JSON.parse(JSON.stringify(o))}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
@@ -404,10 +404,13 @@ function lift(x,y,w,T){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'
 function renderBox(V,tgt,src){
   var O='#ff9a3d', T='#2bc4bd', L='var(--wall)', B='var(--bld)', h='', b=V.band;
   function R(x,y,w,hh,rx,fill,st,sw){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+hh+'" rx="'+rx+'" fill="'+fill+'"'+(st?' stroke="'+st+'" stroke-width="'+sw+'"':'')+'/>'}
-  h+=R(b[0],b[1],b[2]-b[0],b[3]-b[1],10,B,L,4);
-  V.cores.forEach(function(c){h+=R(c.x,c.y,c.w,c.h+8,8,B,L,4)});
-  h+=R(b[0]+2,b[1]+2,b[2]-b[0]-4,b[3]-b[1]-4,9,B);
+  if(!V.outline||!V.outline.length) (V.areas||[]).forEach(function(a){h+='<polygon points="'+a.pts.map(function(q){return q.join(',')}).join(' ')+'" fill="#0b0e14" stroke="'+L+'" stroke-width="4" stroke-linejoin="round"/>'});
+  var ol=V.outline&&V.outline.length?'<polygon points="'+V.outline.map(function(q){return q.join(',')}).join(' ')+'" fill="'+B+'" stroke-linejoin="round"':'';
+  if(ol) h+=ol+' stroke="'+L+'" stroke-width="4"/>'; else h+=R(b[0],b[1],b[2]-b[0],b[3]-b[1],10,B,L,4);
+  V.cores.forEach(function(c){ if(c.main||!ol) h+=R(c.x,c.y,c.w,c.h+8,8,B,L,4)});
+  if(ol) h+=ol+'/>'; else h+=R(b[0]+2,b[1]+2,b[2]-b[0]-4,b[3]-b[1]-4,9,B);
   V.cores.forEach(function(c){h+=R(c.x+3,c.y+3,c.w-6,c.h-3,6,B)});
+  if(V.outline&&V.outline.length) (V.areas||[]).forEach(function(a){h+='<polygon points="'+a.pts.map(function(q){return q.join(',')}).join(' ')+'" fill="#0b0e14" stroke="#2a3140" stroke-width="2" stroke-linejoin="round"/>'});
   V.corr.forEach(function(c){h+=R(c[0],c[1],c[2],c[3],0,'var(--hall)')});
   V.cores.forEach(function(c){
     var x=c.x,y=c.y,w=c.w,hh=c.h,s='';
@@ -435,6 +438,7 @@ function renderBox(V,tgt,src){
     var cx=r.x+w/2, cy=r.y+hh/2, col=isT||isS?'#fff':k==='wc'?'#d6ccff':k==='room'?'#fff':'#aab4c6';
     lab+='<text x="'+cx+'" y="'+cy+'" font-size="'+fs.toFixed(1)+'" fill="'+col+'"'+(vert?' transform="rotate(-90 '+cx+' '+cy+')"':'')+'>'+esc(r.l)+'</text>';
   });
+  (V.areas||[]).forEach(function(a){h+='<text x="'+a.c[0]+'" y="'+a.c[1]+'" font-family="Montserrat,sans-serif" font-size="26" font-weight="600" letter-spacing="4" text-anchor="middle" dominant-baseline="central" fill="#3a4252">'+esc(a.l.toUpperCase())+'</text>'});
   h+='<g class="rm">'+lab+'</g>';
   G[cur].nodes.forEach(function(n){ if(n.t!=='s'&&n.t!=='l') return;
     var gs=18,g=3,x=n.x-gs*1.5-g,y=n.y-gs/2;

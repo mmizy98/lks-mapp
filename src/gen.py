@@ -12,7 +12,7 @@ import json, os, cv2, numpy as np
 from skimage.morphology import skeletonize
 from floors import F
 from boxgen import build as build_box, CO as BCO, UP as BUP, LO as BLO, X0 as BX0, X1 as BX1, CORE_TOP as BCORE_TOP
-BOXF = {'5', '6', '7', '8', '9', '10', '11'}
+BOXF = {'2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}
 from wallvec import straight_walls, straight_poly_path, clean_walls, room_shape, snap_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -264,7 +264,7 @@ vec, seed = {}, {}
 for f in ORDER:
     d = F[f]
     if f in BOXF:
-        B = build_box(f); OFF = 200; H, W = 520, 2600
+        B = build_box(f); OFF = 200; H, W = 900, 2600
         sh = lambda y: y + OFF
         hall = np.zeros((H, W), np.uint8)
         for (a0, b0, a1, b1) in B['corr']:
@@ -274,7 +274,7 @@ for f in ORDER:
             x0, x1, y0, y1 = int(r['x']), int(r['x'] + r['w']), int(sh(r['y'])), int(sh(r['y'] + r['h']))
             labelled.append((r['l'], x0, x1, y0, y1, r['k'], tuple(r.get('al', ()))))
             m = np.zeros((H, W), np.uint8); cv2.rectangle(m, (x0, y0), (x1 - 1, y1 - 1), 1, -1); room_masks.append(m)
-        cmid = sh((BCO[0] + BCO[1]) / 2)
+        cmid = sh(B.get('hall_y', (BCO[0] + BCO[1]) / 2))
         d = dict(d, corr=[(int(a0), int(sh(b0)), int(a1), int(sh(b1))) for a0, b0, a1, b1 in B['corr']],
                  st=[(l, hx, cmid) for l, hx in B['halls']], paths=[], ent=[])
         rooms_out = []
@@ -285,8 +285,12 @@ for f in ORDER:
             if r.get('al'):
                 o['al'] = r['al']
             rooms_out.append(o)
-        vec[f] = {'box': 1, 'off': OFF, 'band': [BX0, sh(BUP[0]), BX1, sh(BLO[1])],
-                  'bb': [BX0 - 10, sh(BCORE_TOP) - 10, BX1 + 10, sh(BLO[1]) + 10],
+        bx0, bx1 = B['band']
+        ay = max([sh(BLO[1])] + [sh(y) for ar in B['areas'] for _, y in ar['pts']] + [sh(y) for _, y in B.get('outline', [])])
+        vec[f] = {'box': 1, 'off': OFF, 'band': [bx0, sh(BUP[0]), bx1, sh(BLO[1])],
+                  'bb': [min([bx0] + [x for ar in B['areas'] for x, _ in ar['pts']]) - 10, sh(BCORE_TOP) - 10, bx1 + 10, ay + 10],
+                  'outline': [[x, sh(y)] for x, y in B.get('outline', [])],
+                  'areas': [{'l': ar['l'], 'pts': [[x, sh(y)] for x, y in ar['pts']], 'c': [ar['c'][0], sh(ar['c'][1])]} for ar in B['areas']],
                   'corr': [[a0, sh(b0), a1 - a0, b1 - b0] for a0, b0, a1, b1 in B['corr']],
                   'stubs': [[s['x'], sh(s['y']), s['w'], s['h']] for s in B['stubs']],
                   'cores': [dict(c, y=sh(c['y']), lifts=[[lx, sh(ly), lw] for lx, ly, lw in c.get('lifts', [])]) for c in B['cores']],
