@@ -284,6 +284,8 @@ for f in ORDER:
                  'lx': x + w / 2, 'ly': y + h / 2, 'r': min(w, h) / 2, 'bw': w, 'bh': h}
             if r.get('al'):
                 o['al'] = r['al']
+            if r.get('hall'):
+                o['hall'] = 1
             rooms_out.append(o)
         bx0, bx1 = B['band']
         ay = max([sh(BLO[1])] + [sh(y) for ar in B['areas'] for _, y in ar['pts']] + [sh(y) for _, y in B.get('outline', [])])

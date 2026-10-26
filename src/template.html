@@ -416,8 +416,8 @@ function renderBox(V,tgt,src){
     var x=c.x,y=c.y,w=c.w,hh=c.h,s='';
     if(c.main){
       // one lift hall: 8 lifts (2 columns × 4) on top, a stair on each side below, the hall between them
-      var st=110, bx=Math.min(30,(w-30)/2), gx=8, ly=y+10, lx=x+w/2-bx-gx/2, n=0;
-      while(ly+bx<=y+hh-st-6&&n<4){s+=lift(lx,ly,bx,T)+lift(lx+bx+gx,ly,bx,T); ly+=bx+6; n++}
+      var st=110, bx=Math.min(30,(w-30)/2), ly=y+10, n=0;  // 4 lifts along each side wall, the middle stays free
+      while(ly+bx<=y+hh-st-6&&n<4){s+=lift(x+8,ly,bx,T)+lift(x+w-8-bx,ly,bx,T); ly+=bx+6; n++}
       var sy=y+hh-st, sw=Math.max(18,(w-16-34)/2);
       [x+8, x+w-8-sw].forEach(function(sx){
         s+=R(sx,sy,sw,y+hh-sy-8,4,'#1f1812',O,2);
@@ -430,12 +430,17 @@ function renderBox(V,tgt,src){
     }
     h+=s;
   });
-  V.stubs.forEach(function(s){h+=R(s[0],s[1],s[2],s[3],6,'#141a26','#252d3d',2)});
+  V.stubs.forEach(function(s){h+=R(s[0],s[1],s[2],s[3],0,'var(--hall)')});
   var lab='';
   V.rooms.forEach(function(r){
     var al=r.al||[], isT=tgt&&(r.l===tgt||al.indexOf(tgt)>=0), isS=src&&(r.l===src||al.indexOf(src)>=0), k=r.k;
     var c={room:['#13284a','#2f6fe0'],wc:['#211a36','#8b78ff'],place:['#151a24','#3a4252'],area:['#151a24','#2a3140']}[k]||['#13284a','#2f6fe0'];
     if(isT) c=['var(--accent)','var(--accent-hi)']; else if(isS) c=['#14532f','var(--start)'];
+    if(r.hall&&!isT&&!isS){
+      h+=R(r.x,r.y,r.w,r.h,4,'#0b0e14','#2a3140',2)+R(r.x+r.w/2-30,r.y-3,60,8,2,'var(--hall)');
+      h+='<text x="'+(r.x+r.w/2)+'" y="'+(r.y+r.h/2)+'" font-family="Montserrat,sans-serif" font-size="24" font-weight="600" letter-spacing="4" text-anchor="middle" dominant-baseline="central" fill="#5d6678">'+esc(String(r.l).toUpperCase())+'</text>';
+      return;
+    }
     h+=R(r.x,r.y,r.w,r.h,6,c[0],c[1],2);
     var n=String(r.l).length, w=r.w, hh=r.h, vert=w<0.55*hh&&w<48, Ln=(vert?hh:w)-10;
     var fs=Math.min(26,Ln/(n*0.62),(vert?w:hh)*0.55); if(fs<7) return;

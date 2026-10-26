@@ -29,7 +29,7 @@ def _row_kind(f, y0, y1):
 
 MINW = 72           # narrowest clickable room box
 CORE_W, CORE_GAP = 78, 34   # each lift/stair tower and the lift hall between a pair
-SMALL_W = 78
+SMALL_W = 110
 
 
 def _fit_row(items, blocked):
@@ -112,6 +112,37 @@ SQUEEZE = {'4'}               # upper-row rooms run under the cores on the scan:
 AREAS = {}
 
 
+SIZES = {'S': 52, 'M': 80, 'L': 118, 'XL': 170}   # the only room widths used on the typical floors
+TYPICAL = ['5', '6', '7', '8', '9', '10', '11']
+
+
+def _cls(w):
+    return 'S' if w < 62 else 'M' if w < 100 else 'L' if w < 145 else 'XL'
+
+
+def _key(f, l, cx):
+    if l in ('М', 'Ж'):
+        return 'wc' + l + ('L' if cx < 1300 else 'R')
+    return l[2:] if f in ('10', '11') else l[1:]
+
+
+_CANON = None
+def _canon():
+    """One x position and one size per room suffix (…01, …02 …), shared by floors 4–11,
+    so that e.g. 518 sits exactly under 618."""
+    global _CANON
+    if _CANON is None:
+        import statistics as st
+        acc = {}
+        for f in TYPICAL:
+            for rk, its in _rows(f)['rows'].items():
+                for l, x0, x1, k, al in its:
+                    if l and k not in ('area', 'free', 'svc'):
+                        acc.setdefault(_key(f, l, (x0 + x1) / 2), []).append(((x0 + x1) / 2, x1 - x0))
+        _CANON = {key: (st.mean(c for c, _ in v), SIZES[_cls(st.median(w for _, w in v))]) for key, v in acc.items()}
+    return _CANON
+
+
 XMAP = {'4': [(371, 341), (780, 854), (1720, 1908), (2075, 2414)]}  # stretch floor 4 so cores line up with 5–11
 
 
@@ -134,9 +165,7 @@ def _stretched(f):
     return d
 
 
-def build(f):
-    if f in YMAP:
-        return build_mapped(f)
+def _rows(f):
     d = _stretched(f) if f in XMAP else F[f]
     X0, X1 = BAND.get(f, (globals()['X0'], globals()['X1']))
     halls = [(l, x) for (l, x, _) in d['st']]
@@ -185,22 +214,14 @@ def build(f):
         if l is None and x0 < 1500 and x1 > 1250 and rk in ('u', 'ud'):
             k = 'free'  # landing of the removed central stair: give it to the rooms
         rows['u' if rk in ('u', 'ud') else 'd'].append([l, x0, x1, k, al])
-    if f in SQUEEZE:
-        zs = sorted(core_zones + small_zones)
-        cs = [min(it[1] for it in rows['u'])] + [(a + b) / 2 for a, b in zs] + [max(it[2] for it in rows['u'])]
-        tg = [(X0, zs[0][0])] + [(zs[i][1], zs[i + 1][0]) for i in range(len(zs) - 1)] + [(zs[-1][1], X1)]
-        def remap(x, seg):
-            a, b = cs[seg], cs[seg + 1]; ta, tb = tg[seg]
-            return ta + (min(max(x, a), b) - a) * (tb - ta) / (b - a)
-        new = []
-        for it in rows['u']:
-            c = (it[1] + it[2]) / 2
-            seg = max(i for i in range(len(cs) - 1) if c >= cs[i]) if c >= cs[0] else 0
-            seg = min(seg, len(tg) - 1)
-            if tg[seg][1] - tg[seg][0] < MINW:  # no room beside an end stair: move inward
-                seg = seg + 1 if seg == 0 else seg - 1
-            new.append([it[0], remap(it[1], seg), remap(it[2], seg)] + it[3:])
-        rows['u'] = new
+    return dict(locals())
+
+
+def build(f):
+    if f in YMAP:
+        return build_mapped(f)
+    S = _rows(f)
+    d, X0, X1, halls, core_zones, smalls, small_zones, ends, corr, rows, zitems = (S[k] for k in ('d', 'X0', 'X1', 'halls', 'core_zones', 'smalls', 'small_zones', 'ends', 'corr', 'rows', 'zitems'))
     rooms, stubs = [], []
     def add_room(l, k, al, x0, x1, ya, yb, rk):
         box = {'l': l, 'k': k, 'x': round(x0 + GAP / 2, 1), 'y': ya + GAP / 2, 'w': round(x1 - x0 - GAP, 1), 'h': yb - ya - GAP, 'row': rk}
@@ -208,14 +229,9 @@ def build(f):
             box['al'] = list(al)
         rooms.append(box)
     def add_stubs(holes, ya, yb):
-        for a_, b_ in holes:
-            w = b_ - a_
-            if w < 30:
-                continue
-            n = max(1, round(w / 130))
-            for i in range(n):
-                s0 = a_ + w * i / n
-                stubs.append({'x': round(s0 + GAP / 2, 1), 'y': ya + GAP / 2, 'w': round(w / n - GAP, 1), 'h': yb - ya - GAP})
+        for a_, b_ in holes:  # empty space reads as corridor-coloured floor, not as fake rooms
+            if b_ - a_ >= 6:
+                stubs.append({'x': round(a_, 1), 'y': ya, 'w': round(b_ - a_, 1), 'h': yb - ya})
     def holes_of(taken, a0, a1, cut):
         taken = sorted(taken); holes, cur = [], a0
         for a_, b_ in taken:
@@ -227,21 +243,38 @@ def build(f):
         for z0, z1 in cut:
             holes = [p for a_, b_ in holes for p in ((a_, min(b_, z0)), (max(a_, z1), b_)) if p[1] - p[0] > 0]
         return holes
+    canon = _canon()
     for rk, items in rows.items():
-        items += [['#', z0, z1, 'zone', None] for z0, z1 in ends + ((core_zones + small_zones) if rk == 'u' and f in SQUEEZE else [])]  # zones split rows into separate runs
-        items.sort(key=lambda r: r[1])
-        fitted = _fit_row([r[:4] for r in items], blocked_u if rk == 'u' else blocked_d)
-        als = {r[0]: r[4] for r in items if r[0]}
         ry = UP if rk == 'u' else LO
-        for l, x0, x1, k in fitted:
-            if l and k not in ('area', 'zone'):
-                for z0, z1 in (outer if rk == 'd' else []):  # keep clear of the up-connectors
-                    if x0 < z1 and x1 > z0:
-                        x0, x1 = (z1, x1) if (x0 + x1) / 2 > (z0 + z1) / 2 else (x0, z0)
-                add_room(l, k, als.get(l), x0, x1, ry[0], ry[1], rk)
-        taken = [(r['x'] - GAP / 2, r['x'] + r['w'] + GAP / 2) for r in rooms if r['row'] == rk]
         cut = (core_zones + small_zones + ends) if rk == 'u' else ends
-        add_stubs(holes_of(taken, X0 + 6, X1 - 6, cut), ry[0], ry[1])
+        segs = holes_of([], X0 + 6, X1 - 6, sorted(cut))
+        placed = {i: [] for i in range(len(segs))}
+        for l, x0, x1, k, al in items:
+            if not l or k in ('area', 'free', 'svc'):
+                continue
+            key = _key(f, l, (x0 + x1) / 2)
+            cx, w = canon.get(key, ((x0 + x1) / 2, SIZES[_cls(x1 - x0)])) if f in TYPICAL else ((x0 + x1) / 2, SIZES[_cls(x1 - x0)])
+            ok = [i for i in range(len(segs)) if segs[i][1] - segs[i][0] >= SIZES['S']] or list(range(len(segs)))
+            si = min(ok, key=lambda i: 0 if segs[i][0] <= cx <= segs[i][1] else min(abs(cx - segs[i][0]), abs(cx - segs[i][1])))
+            placed[si].append([cx - w / 2, w, l, k, al])
+        for si, its in placed.items():
+            s0, s1 = segs[si]
+            its.sort(key=lambda r: r[0])
+            need = sum(r[1] for r in its)
+            if need > s1 - s0:  # too tight: shrink everything in this stretch evenly
+                sc = (s1 - s0) / need
+                for r in its:
+                    r[1] *= sc
+            cur = s0
+            for r in its:  # forward: keep order, no overlaps
+                r[0] = max(r[0], cur); cur = r[0] + r[1]
+            lim = s1
+            for r in reversed(its):  # backward: stay inside the stretch
+                r[0] = min(r[0], lim - r[1]); lim = r[0]
+            for x, w, l, k, al in its:
+                add_room(l, k, al, x, x + w, ry[0], ry[1], rk)
+        taken = [(r['x'] - GAP / 2, r['x'] + r['w'] + GAP / 2) for r in rooms if r['row'] == rk]
+        add_stubs(holes_of(taken, X0 + 6, X1 - 6, cut), ry[0] + GAP / 2, ry[1] - GAP / 2)
     # zone blocks: rooms of the zone as tidy columns between the two connectors
     for (zl, zr), items in zitems.items():
         b0, b1 = zl + CONN, zr - CONN
@@ -282,7 +315,8 @@ def build(f):
     for m in smalls:
         # small end stairs: a short horizontal flight above the band, two lifts right under it
         cores.append({'x': m - SMALL_W / 2, 'y': SMALL_TOP, 'w': SMALL_W, 'h': -SMALL_TOP + 4, 'main': False,
-                      'lifts': [[m - 33, 12, 30], [m + 3, 12, 30]]})
+                      'lifts': [[m - SMALL_W / 2 + 4, 10, 28], [m + SMALL_W / 2 - 32, 10, 28]]})
+        corr.append((m - SMALL_W / 2, UP[0], m + SMALL_W / 2, UP[1]))  # free passage from the corridor to the stair, lifts on its sides
     return {'rooms': rooms, 'stubs': stubs, 'cores': cores, 'halls': halls, 'corr': corr, 'band': (X0, X1),
             'areas': [{'l': l, 'pts': pts, 'c': c} for l, pts, c in AREAS.get(f, [])]}
 
@@ -302,7 +336,7 @@ CLEAN_ROOMS = {'3': [  # floor 3 tidied: equal-height upper row, everything insi
     R_('312', 905, 1065, 125, 308, al=['312а']), R_('316', 1090, 1250, 125, 308, al=['316а']), R_('318', 1290, 1450, 125, 308, al=['318а']),
     R_('320', 1475, 1635, 125, 308, al=['320а']), R_('322', 1830, 1990, 125, 308, al=['322а']),
     R_('324', 2080, 2240, 125, 308, al=['324а', '317']), R_('326', 2265, 2425, 125, 308, al=['328', '317а']), R_('330', 2445, 2505, 125, 308),
-    R_('301', 305, 420, 408, 480), R_(None, 420, 640, 408, 480, 'svc'), R_('М', 640, 705, 408, 444, 'wc'), R_('Ж', 640, 705, 444, 480, 'wc'), R_('303', 705, 767, 408, 480),
+    R_('301', 305, 385, 408, 480), R_(None, 385, 560, 408, 480, 'svc'), R_('М', 560, 620, 408, 480, 'wc'), R_('Ж', 620, 680, 408, 480, 'wc'), R_('303', 680, 767, 408, 480),
     R_(None, 1092, 1192, 425, 592, 'svc'), R_('Читальный зал', 1192, 1508, 425, 592, 'place', ['305']),
     R_('311', 1508, 1642, 425, 500), R_('307', 1508, 1575, 500, 592), R_('313', 1575, 1642, 500, 592)]}
 CLEAN_ROOMS['2'] = [
@@ -376,9 +410,38 @@ def build_mapped(f):
         if b['h'] < 34:
             b['h'] = 34
         b.update({'l': l, 'k': k, 'row': 'm'})
+        if f == '3' and l == 'Читальный зал':
+            b['hall'] = 1  # drawn like the atrium, with an entrance from the corridor
         if al:
             b['al'] = list(al)
         rooms.append(b)
+    # the four standard sizes here too: snap teaching rooms to S/M/L/XL, keep order, no overlaps
+    rs = sorted(rooms, key=lambda b: (round(b['y']), round(b['h']), b['x']))
+    clusters, cur = [], []
+    for b in rs:
+        if cur and round(b['y']) == round(cur[-1]['y']) and round(b['h']) == round(cur[-1]['h']) and b['x'] - (cur[-1]['x'] + cur[-1]['w']) < 20:
+            cur.append(b)
+        else:
+            if cur: clusters.append(cur)
+            cur = [b]
+    if cur: clusters.append(cur)
+    for cl in clusters:
+        s0, s1 = cl[0]['x'], cl[-1]['x'] + cl[-1]['w']
+        for b in cl:
+            if b['k'] == 'room':
+                c = b['x'] + b['w'] / 2; b['w'] = SIZES[_cls(b['w'] + GAP)] - GAP; b['x'] = c - b['w'] / 2
+        need = sum(b['w'] + GAP for b in cl) - GAP
+        if need > s1 - s0:
+            sc = (s1 - s0 - GAP * (len(cl) - 1)) / sum(b['w'] for b in cl)
+            for b in cl: b['w'] *= sc
+        x = s0
+        for b in cl:
+            b['x'] = max(b['x'], x); x = b['x'] + b['w'] + GAP
+        lim = s1
+        for b in reversed(cl):
+            b['x'] = min(b['x'], lim - b['w']); lim = b['x'] - GAP
+        for b in cl:
+            b['x'] = round(b['x'], 1); b['w'] = round(b['w'], 1)
     # rows of small neighbours share their width evenly, so none gets too thin to tap
     rs = sorted(rooms, key=lambda b: (round(b['y']), round(b['h']), b['x']))
     runs, cur = [], []
