@@ -112,7 +112,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
       <div class="fields">
         <div class="field"><label for="inFrom">Откуда</label><input id="inFrom" autocomplete="off" inputmode="text" placeholder="вход или аудитория"></div>
         <button class="ibtn swap" id="swap" title="Поменять местами" aria-label="Поменять местами">⇅</button>
-        <div class="field"><label for="inTo">Куда</label><input id="inTo" autocomplete="off" inputmode="text" placeholder="номер аудитории, например 403"></div>
+        <div class="field"><label for="inTo">Куда</label><input id="inTo" autocomplete="off" inputmode="text" placeholder="номер аудитории, например 403л"></div>
       </div>
       <ul id="sug" role="listbox" hidden></ul>
       <p class="note warn" id="viewNote"></p>
@@ -155,7 +155,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 (function(){
 'use strict';
 var $=function(s){return document.querySelector(s)};
-var FLOORS=['1a','1','2','3','4','5','6','7','8','9','10','11'];
+var FLOORS=['1','2','3','4','5','6','7','8','9','10','11'];
 var SEED=/*SEED*/null;
 var VEC=/*VEC*/null||{};
 var G={};
@@ -693,7 +693,7 @@ $('#mEdit').addEventListener('click',function(){setMode('edit')});
 /* ---------- start ---------- */
 initData();
 (function(){
-  var all=items(), ent=all.filter(function(i){return i.n.t==='e'&&i.label==='Главный вход'})[0]||all.filter(function(i){return i.n.t==='e'})[0], to=all.filter(function(i){return i.k==='403'})[0];
+  var all=items(), ent=all.filter(function(i){return i.n.t==='e'&&i.label==='Главный вход'})[0]||all.filter(function(i){return i.n.t==='e'})[0], to=all.filter(function(i){return i.k===norm('403л')})[0];
   if(ent){sel.from=ent; $('#inFrom').value=ent.label}
   if(to){sel.to=to; $('#inTo').value=to.label}
   recompute(); cur=R?R.floors[R.floors.length-1]:'4'; setFloor(cur); renderFloors();

@@ -277,6 +277,7 @@ def build(f):
         add_stubs(holes_of(taken, X0 + 6, X1 - 6, cut), ry[0] + GAP / 2, ry[1] - GAP / 2)
     # zone blocks: rooms of the zone as tidy columns between the two connectors
     for (zl, zr), items in zitems.items():
+        stubs.append({'x': zl, 'y': UP[0], 'w': zr - zl, 'h': PASS[1] - UP[0]})  # no dark slits inside the end block
         b0, b1 = zl + CONN, zr - CONN
         cols = []  # [label, kind, al, tall, x0, x1, lower]
         for l, x0, x1, k, al, rk in sorted(items, key=lambda r: r[1]):
@@ -351,13 +352,17 @@ CLEAN_ROOMS['2'] = [
     R_('243', 867, 962, 410, 583), R_('237', 962, 1058, 410, 583), R_('Книгохранилище', 1058, 1367, 410, 550, 'area'), R_('229', 1058, 1167, 550, 583),
     R_('244', 867, 917, 608, 658), R_('241', 917, 967, 608, 658), R_('235', 967, 1017, 608, 658), R_('233', 1017, 1067, 608, 658), R_('231', 1067, 1117, 608, 658),
     R_('Читальный зал', 1167, 1325, 550, 658, 'place', ['225']), R_('Читальный зал', 1325, 1495, 550, 658, 'place', ['221']), R_('217', 1495, 1583, 550, 658),
-    R_('205', 1367, 1421, 410, 460), R_('205а', 1421, 1475, 410, 460), R_('205б', 1475, 1529, 410, 460), R_('205в', 1529, 1583, 410, 460),
+    R_('205', 1367, 1475, 410, 460), R_('205а', 1475, 1583, 410, 460),
     R_('Абонемент', 1367, 1583, 460, 550, 'place'), R_('207', 1605, 1690, 410, 550), R_('209', 1690, 1740, 410, 550),
     R_('247', 1740, 1800, 410, 470), R_('247а', 1800, 1855, 410, 470), R_('249', 1855, 1910, 410, 470), R_('251', 1910, 1962, 410, 470)]
 CLEAN_CORR = {'3': [(305, 310, 2505, 408)], '2': [(408, 305, 2050, 410), (2050, 305, 2510, 345)]}
 OUTLINES = {
     '3': [(300, 125), (2510, 125), (2510, 417), (2133, 417), (1750, 650), (300, 650)],
     '2': [(260, 130), (2492, 130), (2550, 425), (2025, 425), (1733, 658), (683, 658), (600, 800), (342, 958), (260, 958)],
+}
+FILL = {  # areas painted corridor-colour behind the rooms, so no dark slits remain between them (scan coords)
+    '2': [(300, 130, 2490, 300), (683, 410, 1740, 658), (1740, 410, 1962, 470), (470, 410, 683, 470)],
+    '3': [(305, 125, 2505, 308), (305, 408, 767, 480), (1092, 425, 1678, 592)],
 }
 EXTRA_STAIRS = {'2': [(402, 200, 480, 300)]}  # left end stair missing from the scan data
 EXTRA_CORR = {  # inner passages to rooms that do not open onto the main corridor (scan coords)
@@ -481,6 +486,16 @@ def build_mapped(f):
             w = SMALL_W; x = mid - w / 2; y = -98
             cores.append({'x': x, 'y': y, 'w': w, 'h': -y + 4, 'main': False, 'sh': 40, 'lifts': [[mid - 31, y + 54, 28], [mid + 3, y + 54, 28]]})
     hy = (corr[0][1] + corr[0][3]) / 2
+    fills = []
+    for (x0, y0, x1, y1) in FILL.get(f, []):
+        segs = [(x0, x1)]
+        if y0 < 320:  # upper row: keep the lift/stair blocks visible
+            for c in cores:
+                if c['main']:
+                    segs = [p for a, b in segs for p in ((a, min(b, c['x'])), (max(a, c['x'] + c['w']), b)) if p[1] - p[0] > 0]
+        for a, b in segs:
+            fills.append({'x': a, 'y': round(ym(y0)), 'w': b - a, 'h': round(ym(y1) - ym(y0))})
+    stubs = fills + stubs
     return {'rooms': rooms, 'stubs': stubs, 'cores': cores, 'halls': halls, 'corr': corr, 'hall_y': hy,
             'band': (min(x for x, _ in _outline(f)), max(x for x, _ in _outline(f))), 'outline': _outline(f),
             'areas': [{'l': l, 'pts': [(x, round(ym(y))) for x, y in pts], 'c': (c[0], round(ym(c[1])))} for l, pts, c in MAP_AREAS.get(f, [])]}

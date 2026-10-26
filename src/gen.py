@@ -1,3 +1,4 @@
+import re
 """Builds vector map data and the routing graph from the scans + floors.py.
 
 Geometry comes from the scans themselves (src/scans/f*.jpg):
@@ -16,7 +17,7 @@ BOXF = {'2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}
 from wallvec import straight_walls, straight_poly_path, clean_walls, room_shape, snap_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ORDER = ['1a', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+ORDER = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
 THR, MINLEN, MINAREA = 130, 45, 60
 
 
@@ -591,6 +592,27 @@ for f in ORDER:
     seed[f] = {'nodes': nodes, 'edges': edges}
     print(f, 'rooms', len(rooms_out), 'nodes', len(nodes), 'pieces', len({find(i) for i in range(len(nodes))}),
           'kb', round(sum(len(json.dumps(v, ensure_ascii=False)) for v in vec[f].values()) / 1024))
+
+# Building letter: every room number gets «л» (УЛК), e.g. 403л, 625ал. Rooms with any other letter are dropped.
+NUM = re.compile(r'^(\d+)(а?)$')
+BAD = re.compile(r'^\d+[б-яё]$')
+def lname(l):
+    m = NUM.match(l or '')
+    return m.group(1) + m.group(2) + 'л' if m else l
+for f in list(vec):
+    V = vec[f]
+    V['rooms'] = [r for r in V['rooms'] if not BAD.match(r.get('l') or '')]
+    for r in V['rooms']:
+        r['l'] = lname(r['l'])
+        if r.get('al'):
+            r['al'] = [lname(a) for a in r['al'] if not BAD.match(a)]
+    g = seed[f]
+    gone = {n['id'] for n in g['nodes'] if n['t'] == 'r' and BAD.match(n.get('l') or '')}
+    g['nodes'] = [n for n in g['nodes'] if n['id'] not in gone]
+    g['edges'] = [e for e in g['edges'] if e[0] not in gone and e[1] not in gone]
+    for n in g['nodes']:
+        if n['t'] == 'r':
+            n['l'] = lname(n['l'])
 
 json.dump(vec, open(os.path.join(HERE, 'vec.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
 json.dump(seed, open(os.path.join(HERE, 'seed.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
