@@ -276,10 +276,9 @@ def build(f):
                     add_stubs([(x, x + cw)], ZLOW[0], ZLOW[1])
             x += cw
     cores = []
-    for _, hx in halls:  # two equal towers, symmetric about the lift hall
-        for side in (-1, 1):
-            x = hx + side * (CORE_GAP / 2) - (CORE_W if side < 0 else 0)
-            cores.append({'x': x, 'y': CORE_TOP, 'w': CORE_W, 'h': UP[1] - CORE_TOP, 'main': True})
+    for _, hx in halls:  # one block per lift hall: 8 lifts (2×4) on top, stairs either side below
+        w = 2 * CORE_W + CORE_GAP
+        cores.append({'x': hx - w / 2, 'y': CORE_TOP, 'w': w, 'h': UP[1] - CORE_TOP, 'main': True})
     for m in smalls:
         # small end stairs: a short horizontal flight above the band, two lifts right under it
         cores.append({'x': m - SMALL_W / 2, 'y': SMALL_TOP, 'w': SMALL_W, 'h': -SMALL_TOP + 4, 'main': False,
@@ -306,7 +305,22 @@ CLEAN_ROOMS = {'3': [  # floor 3 tidied: equal-height upper row, everything insi
     R_('301', 305, 420, 408, 480), R_(None, 420, 640, 408, 480, 'svc'), R_('М', 640, 705, 408, 444, 'wc'), R_('Ж', 640, 705, 444, 480, 'wc'), R_('303', 705, 767, 408, 480),
     R_(None, 1092, 1192, 425, 592, 'svc'), R_('Читальный зал', 1192, 1508, 425, 592, 'place', ['305']),
     R_('311', 1508, 1642, 425, 500), R_('307', 1508, 1575, 500, 592), R_('313', 1575, 1642, 500, 592)]}
-CLEAN_CORR = {'3': [(305, 310, 2505, 408)]}
+CLEAN_ROOMS['2'] = [
+    R_('202', 300, 370, 130, 300), R_('204', 370, 440, 130, 300), R_('206', 440, 500, 130, 215), R_('208', 440, 500, 215, 300),
+    R_('Конференц-зал', 500, 645, 130, 300, 'place', ['210']), R_('М', 650, 715, 130, 300, 'wc'), R_('Ж', 852, 905, 130, 300, 'wc'),
+    R_('212', 905, 1060, 130, 300), R_('216', 1060, 1210, 130, 300), R_('218', 1275, 1440, 130, 300), R_('220', 1440, 1605, 130, 300),
+    R_('Ж', 1605, 1665, 130, 300, 'wc'), R_('М', 1802, 1845, 130, 300, 'wc'), R_('222', 1845, 1985, 130, 300), R_('246', 1985, 2045, 130, 300),
+    R_('224', 2045, 2235, 130, 300), R_('226', 2235, 2320, 130, 300), R_('228', 2320, 2400, 130, 300), R_('230', 2400, 2490, 130, 215), R_('232', 2400, 2490, 215, 300),
+    R_('Буфет', 2050, 2140, 345, 425, 'place'), R_('253', 2140, 2215, 345, 425), R_('255', 2215, 2290, 345, 425), R_('257', 2290, 2365, 345, 425),
+    R_('259', 2365, 2440, 345, 425), R_('261', 2440, 2515, 345, 425),
+    R_('201', 470, 650, 410, 470), R_('203', 683, 850, 410, 530), R_('Фойе', 683, 850, 530, 658, 'area'),
+    R_('243', 867, 962, 410, 583), R_('237', 962, 1058, 410, 583), R_('Книгохранилище', 1058, 1367, 410, 550, 'area'), R_('229', 1058, 1167, 550, 583),
+    R_('244', 867, 917, 608, 658), R_('241', 917, 967, 608, 658), R_('235', 967, 1017, 608, 658), R_('233', 1017, 1067, 608, 658), R_('231', 1067, 1117, 608, 658),
+    R_('Читальный зал', 1167, 1325, 550, 658, 'place', ['225']), R_('Читальный зал', 1325, 1495, 550, 658, 'place', ['221']), R_('217', 1495, 1583, 550, 658),
+    R_('205', 1367, 1421, 410, 460), R_('205а', 1421, 1475, 410, 460), R_('205б', 1475, 1529, 410, 460), R_('205в', 1529, 1583, 410, 460),
+    R_('Абонемент', 1367, 1583, 460, 550, 'place'), R_('207', 1605, 1690, 410, 550), R_('209', 1690, 1740, 410, 550),
+    R_('247', 1740, 1800, 410, 470), R_('247а', 1800, 1855, 410, 470), R_('249', 1855, 1910, 410, 470), R_('251', 1910, 1962, 410, 470)]
+CLEAN_CORR = {'3': [(305, 310, 2505, 408)], '2': [(408, 305, 2050, 410), (2050, 305, 2510, 345)]}
 OUTLINES = {
     '3': [(300, 125), (2510, 125), (2510, 417), (2133, 417), (1750, 650), (300, 650)],
     '2': [(260, 130), (2492, 130), (2550, 425), (2025, 425), (1733, 658), (683, 658), (600, 800), (342, 958), (260, 958)],
@@ -314,7 +328,7 @@ OUTLINES = {
 EXTRA_STAIRS = {'2': [(402, 200, 480, 300)]}  # left end stair missing from the scan data
 EXTRA_CORR = {  # inner passages to rooms that do not open onto the main corridor (scan coords)
     '3': [(1642, 400, 1678, 592)],
-    '2': [(850, 400, 867, 608), (850, 583, 1167, 608), (1583, 400, 1605, 575)],
+    '2': [(850, 400, 867, 608), (850, 583, 1167, 608), (1583, 400, 1605, 550)],
 }
 MAP_AREAS = {
     '3': [('Атриум', [(767, 408), (2133, 408), (1750, 650), (767, 650)], (950, 600)),
@@ -393,7 +407,12 @@ def build_mapped(f):
             continue  # central stair removed, as on the upper floors
         main = any(abs(hx - mid) < 110 for _, hx in halls)
         if main:
-            cores.append({'x': cx0, 'y': CORE_TOP + 50, 'w': cx1 - cx0, 'h': round(ym(cy1)) - CORE_TOP - 50, 'main': True})
+            hx = min((h for _, h in halls), key=lambda h: abs(h - mid))
+            same = next((c for c in cores if c['main'] and c.get('hx') == hx), None)
+            if same:  # merge the two towers of one lift hall into one block
+                x0 = min(same['x'], cx0); x1 = max(same['x'] + same['w'], cx1); same['x'], same['w'] = x0, x1 - x0
+            else:
+                cores.append({'x': cx0, 'y': CORE_TOP + 50, 'w': cx1 - cx0, 'h': round(ym(cy1)) - CORE_TOP - 50, 'main': True, 'hx': hx})
         else:
             # end stair as on the upper floors: a small block above the band, stair on top, two small lifts under it
             w = SMALL_W; x = mid - w / 2; y = -98
